@@ -9,7 +9,6 @@ library(corrplot)
 library(itsadug)
 library(broom)
 library(huxtable)
-library(usethis)
 
 #Look into QDO, PDO, ENSO
 
@@ -21,30 +20,12 @@ Timing<-read.csv(file="Data/R/YSL_Ice.csv",header=T,sep=",")
 Weather<-read.csv(file="Data/R/Yellowstone_Snow_Rain.csv",header=T,sep=",")
 
 
-##Ice ON
-#Load data
-Wind<-read.csv(file="Data/R/LakeYellowstoneWind.csv", header=T) %>%
-  mutate(Date=mdy_hm(Date),
-         Julian=yday(Date),
-         Year=year(Date),
-         Knots = case_when(Knots == "M" ~ NA,
-                           TRUE ~ Knots))
-
-Wind$Knots <- as.numeric(Wind$Knots)
-
-Weather <- Wind %>%
-  group_by(Year, Julian) %>%
-  slice_max(Knots) %>%
-  select(Knots:Year) %>%
-  right_join(., Weather) 
-
 
 #Summarize weather data
 #Annual
 AnnualWeather<-ddply(Weather,.(Year),summarise,AnnualMax=max(max.C,na.rm=T),
                      AnnualMin=min(min.C,na.rm=T),AnnualRain=sum(rain.mm,na.rm=T),
-                     AnnualSnow=sum(snow.mm,na.rm=T),SnowDepth=max(SnowDepth.mm,na.rm=T),
-                     AnnualWind=mean(Knots,na.rm=T))
+                     AnnualSnow=sum(snow.mm,na.rm=T),SnowDepth=max(SnowDepth.mm,na.rm=T))
 #Remove last row
 AnnualWeather<-AnnualWeather[-nrow(AnnualWeather),]
 #inf because all NAs
