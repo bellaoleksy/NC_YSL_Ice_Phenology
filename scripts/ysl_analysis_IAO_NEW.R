@@ -19,8 +19,6 @@ summarize <- dplyr::summarize
 Timing<-read.csv(file="Data/R/YSL_Ice.csv",header=T,sep=",")
 Weather<-read.csv(file="Data/R/Yellowstone_Snow_Rain.csv",header=T,sep=",")
 
-
-
 #Summarize weather data
 #Annual
 AnnualWeather<-ddply(Weather,.(Year),summarise,AnnualMax=max(max.C,na.rm=T),
@@ -105,84 +103,7 @@ YSLon<-merge(x=YSL1,y=SeasonWeather,by="Year",all.x=T)
 YSLon=do.call(data.frame,lapply(YSLon,function(value) replace(value,is.infinite(value),NA)))
 
 
-
-
-
-#Summarize weather data
-#Annual
-# AnnualWeather<-ddply(Weather,.(Year),summarise,AnnualMax=max(max.C,na.rm=T),
-#                      AnnualMin=min(min.C,na.rm=T),AnnualRain=sum(rain.mm,na.rm=T),
-#                      AnnualSnow=sum(snow.mm,na.rm=T),SnowDepth=max(SnowDepth.mm,na.rm=T))
-# #Remove last row
-# AnnualWeather<-AnnualWeather[-nrow(AnnualWeather),]
-# #inf because all NAs
-# 
-# #Merge dataframes (Ice on)
-# YSL1<-merge(x=Timing,y=AnnualWeather,by="Year",all.x=T)
-# 
-# 
-# ##Ice OFF
-# #####Ice OFF!
-# #Spring
-# SpringF<-Weather[Weather$Month=="June"|Weather$Month=="Apr"|Weather$Month=="May",]
-# SummerF<-Weather[Weather$Month=="Sep"|Weather$Month=="Jul"|Weather$Month=="Aug",]
-# FallF<-Weather[Weather$Month=="Dec"|Weather$Month=="Oct"|Weather$Month=="Nov",]
-# WinterF<-Weather[Weather$Month=="Mar"|Weather$Month=="Jan"|Weather$Month=="Feb",]
-# 
-# Spring1F <-
-#   ddply(
-#     SpringF,
-#     .(Year),
-#     summarise,
-#     SpringMax = max(max.C, na.rm = T),
-#     SpringMin = min(min.C, na.rm = T),
-#     SpringRain = sum(rain.mm, na.rm = T),
-#     SpringSnow = sum(snow.mm, na.rm = T),
-#     SpringTempSum = sum(mean.C, na.rm = T)
-#   )
-# Summer1F <-
-#   ddply(
-#     SummerF,
-#     .(Year),
-#     summarise,
-#     SummerMax = max(max.C, na.rm = T),
-#     SummerMin = min(min.C, na.rm = T),
-#     SummerRain = sum(rain.mm, na.rm = T),
-#     SummerSnow = sum(snow.mm, na.rm = T)
-#   )
-# Fall1F <-
-#   ddply(
-#     FallF,
-#     .(Year),
-#     summarise,
-#     FallMax = max(max.C, na.rm = T),
-#     FallMin = min(min.C, na.rm = T),
-#     FallRain = sum(rain.mm, na.rm = T),
-#     FallSnow = sum(snow.mm, na.rm = T)
-#   )
-# Winter1F <-
-#   ddply(
-#     WinterF,
-#     .(Year),
-#     summarise,
-#     WinterMax = max(max.C, na.rm = T),
-#     WinterMin = min(min.C, na.rm = T),
-#     WinterRain = sum(rain.mm, na.rm = T),
-#     WinterSnow = sum(snow.mm, na.rm = T),
-#     WinterSnowDepth = max(SnowDepth.mm, na.rm = T)
-#   )
-# #Bind seasonal dataframes together
-# # SeasonWeatherF<-cbind(Spring1F,Summer1F,Fall1F,Winter1F)
-# # #Remove the extra year columns
-# # SeasonWeatherF<-subset(SeasonWeatherF,select=-c(6,11,16))
-# SeasonWeatherF <- full_join(Spring1F, Summer1F) %>%
-#   full_join(Fall1F) %>%
-#   full_join(Winter1F)
-# 
-# YSLoff<-merge(x=YSL1,y=SeasonWeatherF,by="Year",all.x=T)
-# #Replace Inf with NA
-# YSLoff=do.call(data.frame,lapply(YSLoff,function(value) replace(value,is.infinite(value),NA)))
-
+##ICE-OFF was already compiled by Lusha, here:
 YSLoff<-read.csv(file="Data/R/YSLoff_Shifted.csv",header=T,sep=",") %>%
   select(-1)
 
