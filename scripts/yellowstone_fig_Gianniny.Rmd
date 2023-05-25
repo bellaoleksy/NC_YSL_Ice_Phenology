@@ -1,0 +1,616 @@
+---
+title: "Yellowstone Figure Updates"
+author: "Gordon Gianniny"
+date: "2023-02-13"
+output: html_document
+---
+Setup and packages:
+
+```{r}
+library(ggplot2) #ggplot package for plotting
+library(tidyverse) #tidyverse for data wrangling
+library(lubridate) #lubridate package for working with dates (not used in this script)
+library(patchwork) #patchwork package for multi-panel figure layouts
+library(RColorBrewer) #RColorBrewer for color palettes
+```
+
+
+## I. Intro 
+
+This script reads in data to recreate figures 1a-c and figure 2 for "A century of warming..." manuscript, then makes edits using 
+ggplot for easier readability. Current Figures are: 
+
+  1a - year, min temp and max temp (seperate y-axes)
+  1b - year, snow depth (mm)
+  1c - Year, precip (mm) - divided into rain and snow
+  2 - Year, ice-on and ice-off (julian; seperate axes). 
+  
+Data file used: YSLoff.csv; stored in project directory -> data_files.
+Columns needed are: 
+    1. Year
+    2. IceOnJulian
+    3. IceOffJulian
+    4. AnnualMax
+    5. AnnualMin
+    6. AnnualRain
+    7. AnnualSnow
+    8. SnowDepth 
+
+Read in data:
+**NOTE - If running this script on a different computer, you'll need to update the filepath below**
+
+```{r}
+ysl_ice <- read.csv("scripts/YSLoff.csv")%>% #UPDATE FILEPATH HERE
+  select(Year:SnowDepth)%>%
+  select(-IceOnDate, -IceOffDate) #select desired columns
+```
+
+
+Calculate new column with ice cover duration for each year using ice on and ice off dates:
+
+```{r}
+ysl_ice <- ysl_ice %>%
+  mutate(ice_cover = #name of new column
+           IceOffJulian+(365-IceOnJulian) #calculate ice cover duration = julian day of ice off + 365 - julian day of ice on
+           )
+#Checking that calculation worked: 
+head(ysl_ice)
+summary(ysl_ice$ice_cover, na.rm = T)
+```
+
+
+Re-organize data for easier use with ggplot - want one column with measurement type (ice on, ice off, annual min, annual max, 
+annual rain, annual snow, snow depth, ice cover) and one column with corresponding measurement value; one row for each value for each year (i.e. 8 rows per year). Syntax using the pivot_longer function:
+
+```{r}
+ysl_plot <- ysl_ice %>%
+  pivot_longer(!Year, #Pivot function to reorganize table - using Year as index column
+               names_to = "meas_type", #name of measurement type column
+               values_to = "meas_value") #name of measurement value column
+
+#Checking the first two years:
+head(ysl_plot, 16)
+```
+
+-----------------
+-----------------
+
+
+#II. Re-creating figures 1a-c and 2 
+
+### a. Figure 1a: x = year, y1 = min temp, y2 = max temp
+
+```{r}
+f1a <- ggplot(
+  filter(ysl_plot, meas_type == "AnnualMax" | meas_type == "AnnualMin"), #data source - selecting desired rows
+  aes(x = Year, y = meas_value, shape = meas_type, color = meas_type) #aesthetic mapping: x = year, y = temp, shape = max or min, color = max or min
+)+
+  geom_point()+ #points
+  geom_smooth(data = subset(ysl_plot, meas_type == "AnnualMin"), #sub-setting data - only want to add trendline to annual minimum temp
+              aes(x = Year, y = meas_value), #Aesthetics - x = year, y = measurement value
+              method = "lm", se = F)+ # Make trendline linear
+  theme_classic()+ #Making it look like baseR plots
+  labs(x = "", y = "Temperature, C", shape = "Legend", color = "Legend")+ #Labeling axes and legend
+  scale_shape_manual(values = c(15, 21),labels = c("Maximum Temp., C", "Minimum Temp., C"), name = "Legend")+ #adjusting shapes and labels of points
+  scale_color_manual(values = c("Red", "Blue"), labels = c("Maximum Temp., C", "Minimum Temp., C"), name = "Legend")+ #adjusting colors and labels
+  facet_wrap(~meas_type, scales = "free_y")+ #Make 2 side-by side plots with min and max temps; color coded by measurement type
+  theme(legend.position = "none") # removing legend
+
+f1a
+```
+
+### b. Figure 1b - x = year, y = snow depth
+
+```{r}
+f1b <- ggplot(
+  filter(ysl_plot, meas_type == "SnowDepth"), #data source - selecting desired rows
+  aes(x = Year, y = meas_value, shape = meas_type, color = meas_type) #aesthetic mapping: x = year, y = temp, shape = max or min, color = max or min
+)+
+  geom_point()+ #points
+  theme_classic()+ #Making it look like baseR plots
+  labs(x = "", y = "Snow Depth, mm", shape = "Legend", color = "Legend")+ #Labeling axes and legend
+  scale_shape_manual(values = c(17), labels = c("Snow Depth, mm"), name = "Legend")+ #adjusting shapes and labels of points
+  scale_color_manual(values = c("LightBlue"), labels = c("Snow Depth, mm"), name = "Legend")+ #adjusting colors and labels
+  theme(legend.position = "none") #removing legend
+
+f1b  
+```
+
+### c. Figure 1c - x = year, y1 = annual rainfall, y2 = annual snowfall
+
+```{r}
+f1c<- ggplot(
+  filter(ysl_plot, meas_type == "AnnualRain" | meas_type == "AnnualSnow"), #data source - selecting desired rows
+  aes(x = Year, y = meas_value, shape = meas_type, color = meas_type) #aesthetic mapping: x = year, y = temp, shape = max or min, color = max or min
+)+
+  geom_point()+ #points
+  geom_smooth(data = subset(ysl_plot, meas_type == "AnnualSnow"), #sub-setting data - only want to add trendline to annual minimum temp
+              aes(x = Year, y = meas_value), #Aesthetics - x = year, y = measurement value
+              method = "lm", se = F)+ # Make trendline linear
+  theme_classic()+ #Making it look like baseR plots
+  labs(x = "Year", y = "Annual Precip., mm", shape = "Legend", color = "Legend")+ #Labeling axes and legend
+  scale_shape_manual(values = c(24, 8),labels = c("Annual Rainfall, mm", "Annual Snowfall, mm"), name = "Legend")+ #adjusting shapes and labels of points
+  scale_color_manual(values = c("Green", "Turquoise"), labels = c("Annual Rainfall, mm", "Annual Snowfall, mm"), name = "Legend")+ #adjusting colors and labels
+  facet_wrap(~meas_type, scales = "free_y")+ #Make 2 side-by side plots with min and max temps; color coded by measurement type
+  theme(legend.position = "none") #removing legends 
+f1c
+```
+
+### Complete Figure 1: Stack and save: 
+
+```{r}
+f1abc <- f1a/f1b/f1c #Plot layout using patchwork package: "/" syntax = plot 1 over plot 2
+f1abc
+```
+
+Save:
+
+```{r}
+ggsave("plots/fig1_orig.pdf", #filepath and name for saving plot
+       plot = f1abc, #ggplot object to save
+       device = "pdf", #Specifying to save as PDF
+       width = 6.5 , height = 9 , units = "in", #size: specifying width, height, and units (in, px, cm, etc)
+       dpi = "retina") #resolution 
+```
+
+
+### d. Figure 2 - x = year, y1 = ice on julian, y2 = ice off julian
+
+```{r}
+f2 <- ggplot(
+  filter(ysl_plot, meas_type == "IceOnJulian" | meas_type == "IceOffJulian"), #data source - selecting desired rows
+  aes(x = Year, y = meas_value, shape = meas_type, color = meas_type) #aesthetic mapping: x = year, y = temp, shape = max or min, color = max or min
+)+
+  geom_point()+ #points
+  theme_classic()+ #Making it look like baseR plots
+  labs(x = "Year", y = "Ice On/Off Julian Date", shape = "Legend", color = "Legend")+ #Labeling axes and legend
+  scale_shape_manual(values = c(24, 25),labels = c("Ice Off Date", "Ice On Date"), name = "Legend")+ #adjusting shapes and labels of points
+  scale_color_manual(values = c("Turquoise", "Orange"), labels = c("Ice Off Date", "Ice On Date"), name = "Legend")+ #adjusting colors and labels
+  facet_wrap(~meas_type, scales = "free_y")+ #Make 2 side-by side plots with Ice on and off; color coded by measurement type
+  theme(legend.position = "none") #removing legend
+f2
+```
+
+Save:
+
+```{r}
+ggsave("plots/fig2_orig.pdf", plot = f2, device = "pdf", width = 6.5 , height = 5 , units = "in", dpi = "retina") #see above for detailed syntax
+```
+
+
+-----------------
+-----------------
+
+## III. Figure edits and saving outputs 
+
+Color palates: 
+
+```{r}
+temp.pal <- c("#A50026", "#313695") #specifying color palettes for the different graph types - color codes are based on colorblind-friendly palettes from the RColorBrewer package. 
+snow.pal <- "#74ADD1"
+precip.pal <- c("#7FC97F","#35978F")
+```
+
+### a. Figure 1a: x = year, y1 = min temp, y2 = max temp
+
+With Facet Wrap:
+
+```{r}
+f1a.edited <- ggplot(
+  filter(ysl_plot, meas_type == "AnnualMax" | meas_type == "AnnualMin"), #data source - selecting desired rows
+  aes(x = Year, y = meas_value, shape = meas_type, color = meas_type) #aesthetic mapping: x = year, y = temp, shape = max or min, color = max or min
+)+
+  geom_point()+ #points
+  geom_smooth(data = subset(ysl_plot, meas_type == "AnnualMin"), #sub-setting data - only want to add trendline to annual minimum temp
+              aes(x = Year, y = meas_value), #Aesthetics - x = year, y = measurement value
+              method = "lm", se = F)+ # Make trendline linear
+  theme_classic()+ #Making it look like baseR plots
+  labs(x = "", y = "Temperature, C", shape = "Legend", color = "Legend")+ #Labeling axes and legend
+  scale_shape_manual(values = c(15, 1),labels = c("Maximum Temp., C", "Minimum Temp., C"), name = "Legend")+ #adjusting shapes and labels of points
+  scale_color_manual(values = temp.pal, labels = c("Maximum Temp., C", "Minimum Temp., C"), name = "Legend")+ #adjusting colors and labels
+  facet_wrap(~meas_type, scales = "free_y")+ #Make 2 side-by side plots with min and max temps; color coded by measurement type
+  theme(legend.position = "none", 
+        axis.title = element_text(size = 13), #adjusting size of axis title text
+        axis.text = element_text(size = 11) #adjusting size of axis labels
+        )+
+  scale_x_continuous(limits = c(1927, 2022), n.breaks =6)
+
+f1a.edited
+```
+
+Single Y-axis: 
+
+```{r}
+f1a.single <- ggplot(
+  filter(ysl_plot, meas_type == "AnnualMax" | meas_type == "AnnualMin"), #data source - selecting desired rows
+  aes(x = Year, y = meas_value, shape = meas_type, color = meas_type) #aesthetic mapping: x = year, y = temp, shape = max or min, color = max or min
+)+
+  geom_point()+ #points
+  geom_smooth(data = subset(ysl_plot, meas_type == "AnnualMin"), #sub-setting data - only want to add trendline to annual minimum temp
+              aes(x = Year, y = meas_value), #Aesthetics - x = year, y = measurement value
+              method = "lm", se = F)+ # Make trendline linear
+  theme_classic()+ #Making it look like baseR plots
+  labs(x = "", y = "Temperature, C", shape = "Legend", color = "Legend")+ #Labeling axes and legend
+  scale_shape_manual(values = c(15, 1),labels = c("Annual Maximum", "Annual Minimum"), name = "Legend")+ #adjusting shapes and labels of points
+  scale_color_manual(values = temp.pal, labels = c("Annual Maximum", "Annual Minimum"), name = "Legend")+ #adjusting colors and labels
+  theme(legend.position = "bottom", 
+        axis.title = element_text(size = 13), #adjusting size of axis title text
+        axis.text = element_text(size = 11) #adjusting size of axis labels
+        )+
+  scale_x_continuous(limits = c(1927, 2022), n.breaks =6)
+
+f1a.single
+```
+
+
+### b. Figure 1b - x = year, y = snow depth
+
+```{r}
+f1b.edited <- ggplot(
+  filter(ysl_plot, meas_type == "SnowDepth"), #data source - selecting desired rows
+  aes(x = Year, y = meas_value, shape = meas_type, color = meas_type) #aesthetic mapping: x = year, y = temp, shape = max or min, color = max or min
+)+
+  geom_point()+ #points
+  theme_classic()+ #Making it look like baseR plots
+  labs(x = "", y = "Snow Depth, mm", shape = "Legend", color = "Legend")+ #Labeling axes and legend
+  scale_shape_manual(values = c(2), labels = c("Snow Depth, mm"), name = "Legend")+ #adjusting shapes and labels of points
+  scale_color_manual(values = snow.pal, labels = c("Snow Depth, mm"), name = "Legend")+ #adjusting colors and labels
+  theme(legend.position = "none", 
+        axis.title = element_text(size = 13), #adjusting size of axis title text
+        axis.text = element_text(size = 11) #adjusting size of axis labels
+        )+
+  scale_x_continuous(limits = c(1927, 2022), n.breaks =6)
+
+f1b.edited  
+```
+
+### c. Figure 1c - x = year, y1 = annual rainfall, y2 = annual snowfall
+
+Facet Wrapped:
+
+```{r}
+f1c.edited<- ggplot(
+  filter(ysl_plot, meas_type == "AnnualRain" | meas_type == "AnnualSnow"), #data source - selecting desired rows
+  aes(x = Year, y = meas_value, shape = meas_type, color = meas_type) #aesthetic mapping: x = year, y = temp, shape = max or min, color = max or min
+)+
+  geom_point()+ #points
+  geom_smooth(data = subset(ysl_plot, meas_type == "AnnualSnow"), #sub-setting data - only want to add trendline to annual minimum temp
+              aes(x = Year, y = meas_value), #Aesthetics - x = year, y = measurement value
+              method = "lm", se = F)+ # Make trendline linear
+  theme_classic()+ #Making it look like baseR plots
+  labs(x = "Year", y = "Annual Precip., mm", shape = "Legend", color = "Legend")+ #Labeling axes and legend
+  scale_shape_manual(values = c(19, 8),labels = c("Annual Rainfall, mm", "Annual Snowfall, mm"), name = "Legend")+ #adjusting shapes and labels of points
+  scale_color_manual(values = c(precip.pal), labels = c("Annual Rainfall, mm", "Annual Snowfall, mm"), name = "Legend")+ #adjusting colors and labels
+  facet_wrap(~meas_type, scales = "free_y")+ #Make 2 side-by side plots with min and max temps; color coded by measurement type
+  theme(legend.position = "none", 
+        axis.title = element_text(size = 13), #adjusting size of axis title text
+        axis.text = element_text(size = 11) #adjusting size of axis labels
+        )+
+  scale_x_continuous(limits = c(1927, 2022), n.breaks =6)
+f1c.edited
+```
+
+
+### Complete Figure 1: Stack and save: 
+
+```{r}
+f1abc.edited <- f1a.edited/f1b.edited/f1c.edited #multi-panel plot layout using the patchwork package: "/" syntax between 2 plot objects = plot 1 above plot 2
+f1abc.single
+f1abc.edited
+```
+
+Save:
+
+```{r}
+ggsave("plots/fig1_edited.pdf", plot = f1abc.edited, device = "pdf", width = 6.5 , height = 9 , units = "in", dpi = "retina")#see above for detailed syntax
+```
+
+With one y-axis for 1a:
+
+```{r}
+f1abc.single <- f1a.single/f1b.edited/f1c.edited #multi-panel plot layout using the patchwork package: "/" syntax between 2 plot objects = plot 1 above plot 2
+f1abc.single
+```
+
+Save:
+
+```{r}
+ggsave("plots/fig1_single.pdf", plot = f1abc.single, device = "pdf", width = 6.5 , height = 9 , units = "in", dpi = "retina")#see above for detailed syntax
+```
+
+### d. Figure 2 - x = year, y1 = ice on julian, y2 = ice off julian
+
+```{r}
+onoff.pal <- c("#80CDC1", "#FDAE61")
+
+f2.edited <- ggplot(
+  filter(ysl_plot, meas_type == "IceOnJulian" | meas_type == "IceOffJulian"), #data source - selecting desired rows
+  aes(x = Year, y = meas_value, shape = meas_type, color = meas_type, fill = meas_type) #aesthetic mapping: x = year, y = temp, shape = max or min, color = max or min
+)+
+  geom_point()+ #points
+  theme_classic()+ #Making it look like baseR plots
+  labs(x = "Year", y = "Ice on/off Julian day", shape = "Legend", color = "Legend")+ #Labeling axes and legend
+  scale_shape_manual(values = c(24, 25),labels = c("Ice Off Date", "Ice On Date"), name = "Legend")+ #adjusting shapes and labels of points
+  scale_color_manual(values = onoff.pal, labels = c("Ice Off Date", "Ice On Date"), name = "Legend")+ #adjusting colors and labels
+  scale_fill_manual(values = onoff.pal, labels = c("Ice Off Date", "Ice On Date"), name = "Legend")+ #adjusting fill color and labels
+  facet_wrap(~meas_type, scales = "free_y")+ #Make 2 side-by side plots with Ice on and off; color coded by measurement type
+  theme(legend.position = "none", 
+        axis.title = element_text(size = 13), #adjusting size of axis title text
+        axis.text = element_text(size = 11) #adjusting size of axis labels
+        )+
+  scale_x_continuous(limits = c(1927, 2022), n.breaks =6)
+f2.edited
+```
+
+Save:
+
+```{r}
+ggsave("plots/fig2_edited.pdf", plot = f2.edited, device = "pdf", width = 6.5 , height = 4 , units = "in", dpi = "retina")#see above for detailed syntax
+```
+
+Single Y-axis: 
+
+```{r}
+onoff.pal <- c("#80CDC1", "#FDAE61")
+
+f2.single <- ggplot(
+  filter(ysl_plot, meas_type == "IceOnJulian" | meas_type == "IceOffJulian"), #data source - selecting desired rows
+  aes(x = Year, y = meas_value, shape = meas_type, color = meas_type, fill = meas_type) #aesthetic mapping: x = year, y = temp, shape = max or min, color = max or min
+)+
+  geom_point()+ #points
+  theme_classic()+ #Making it look like baseR plots
+  labs(x = "Year", y = "Ice on/off Julian day", shape = "Legend", color = "Legend")+ #Labeling axes and legend
+  scale_shape_manual(values = c(24, 25),labels = c("Ice Off Date", "Ice On Date"), name = "Legend")+ #adjusting shapes and labels of points
+  scale_color_manual(values = onoff.pal, labels = c("Ice Off Date", "Ice On Date"), name = "Legend")+ #adjusting colors and labels
+  scale_fill_manual(values = onoff.pal, labels = c("Ice Off Date", "Ice On Date"), name = "Legend")+ #adjusting fill color and labels
+  theme(legend.position = "bottom", 
+        axis.title = element_text(size = 13), #adjusting size of axis title text
+        axis.text = element_text(size = 11) #adjusting size of axis labels
+        )+
+  scale_x_continuous(limits = c(1927, 2022), n.breaks =6)+
+  scale_y_continuous(limits = c(0, 365), n.breaks = 10)
+f2.single
+```
+
+Save:
+
+```{r}
+ggsave("plots/fig2_single.pdf", plot = f2.single, device = "pdf", width = 6.5 , height = 4 , units = "in", dpi = "retina")#see above for detailed syntax
+```
+
+
+#### Figure 2 alternative: ice cover duration:
+
+```{r}
+f2.duration <- ggplot(
+  filter(ysl_plot, meas_type == "ice_cover"), #data source - selecting desired rows
+  aes(x = Year, y = meas_value, shape = meas_type, color = meas_type, fill = meas_type) #aesthetic mapping: x = year, y = ice cover duration, shape and color aren't differentiating between anything, but make it easier to edit later
+)+
+  geom_point()+ #points
+  theme_classic()+ #Making it look like baseR plots
+  labs(x = "Year", y = "Ice cover duraiton, days", shape = "Legend", color = "Legend")+ #Labeling axes and legend (not displayed)
+  scale_shape_manual(values =  c(23),labels = c("Ice Off Date", "Ice On Date"), name = "Legend")+ #adjusting shapes and labels of points
+  scale_color_manual(values = c("#80CDC1"), labels = c("Ice Off Date", "Ice On Date"), name = "Legend")+ #adjusting colors and labels
+  scale_fill_manual(values = c("#80CDC1"), labels = c("Ice Off Date", "Ice On Date"), name = "Legend")+ #adjusting fill color and labels
+  theme(legend.position = "none", #removing legend
+        axis.title = element_text(size = 13), #adjusting size of axis title text
+        axis.text = element_text(size = 11) #adjusting size of axis labels
+        )+ 
+  scale_x_continuous(limits = c(1927, 2022), n.breaks =6) #Adjusting # of labels on x axis
+  
+f2.duration
+```
+
+Save:
+
+```{r}
+ggsave("plots/fig2_duration.pdf", plot = f2.duration, device = "pdf", width = 6.5 , height = 4 , units = "in", dpi = "retina") #see above for detailed syntax
+```
+
+
+### Figure edits 02/24: transitiong figure 1 to a 6-panel figure, figure 2 to a 2-panel figure: 
+
+Color palates: 
+
+```{r}
+max.t <- "#A50026" 
+min.t <- "#313695" #specifying color palettes for the different graph types - color codes are based on colorblind-friendly palettes from the RColorBrewer package. 
+snow <- "#74ADD1"
+rain <- "#7FC97F"
+```
+
+
+
+**Figure 1**: 
+
+a. Max temp:
+
+```{r}
+f1a.max <- ggplot(
+  filter(ysl_plot, meas_type == "AnnualMax"), #data source - selecting desired rows
+  aes(x = Year, y = meas_value, shape = meas_type, color = meas_type) #aesthetic mapping: x = year, y = temp, shape = max or min, color = max or min
+)+
+  geom_point()+ #points
+  theme_classic()+ #Making it look like baseR plots
+  labs(x = "", y = "Annual Max. Temp. (C)", shape = "Legend", color = "Legend")+ #Labeling axes and legend
+  scale_shape_manual(values = c(15),labels = c("Annual Maximum", "Annual Minimum"), name = "Legend")+ #adjusting shapes and labels of points
+  scale_color_manual(values = max.t, labels = c("Annual Maximum", "Annual Minimum"), name = "Legend")+ #adjusting colors and labels
+  theme(legend.position = "none", 
+           axis.title.y = element_text(size = 13), #adjusting size of axis title text
+        axis.text.y = element_text(size = 11), #adjusting size of axis labels
+        axis.text.x = element_blank(), #Removing x-axis labels
+        axis.title.x = element_blank() #removing x-axis 
+        )+
+  scale_x_continuous(limits = c(1927, 2022), n.breaks =6)
+
+f1a.max
+```
+
+b. Min Temp: 
+
+```{r}
+f1b.min <- ggplot(
+  filter(ysl_plot, meas_type == "AnnualMin"), #data source - selecting desired rows
+  aes(x = Year, y = meas_value, shape = meas_type, color = meas_type) #aesthetic mapping: x = year, y = temp, shape = max or min, color = max or min
+)+
+  geom_point()+ #points
+  geom_smooth(data = subset(ysl_plot, meas_type == "AnnualMin"), #sub-setting data - only want to add trendline to annual minimum temp
+              aes(x = Year, y = meas_value), #Aesthetics - x = year, y = measurement value
+              method = "lm", se = F)+ # Make trendline linear
+  theme_classic()+ #Making it look like baseR plots
+  labs(x = "", y = "Annual Min. Temp. (C)", shape = "Legend", color = "Legend")+ #Labeling axes and legend
+  scale_shape_manual(values = c(1), labels = c("Annual Maximum", "Annual Minimum"), name = "Legend")+ #adjusting shapes and labels of points
+  scale_color_manual(values = min.t, labels = c("Annual Maximum", "Annual Minimum"), name = "Legend")+ #adjusting colors and labels
+  theme(legend.position = "none", 
+         axis.title.y = element_text(size = 13), #adjusting size of axis title text
+        axis.text.y = element_text(size = 11), #adjusting size of axis labels
+        axis.text.x = element_blank(), #Removing x-axis labels
+        axis.title.x = element_blank() #removing x-axis 
+        )+
+  scale_x_continuous(limits = c(1927, 2022), n.breaks =6)
+
+f1b.min
+```
+
+c. Snow depth: 
+
+```{r}
+f1c.snow <- ggplot(
+  filter(ysl_plot, meas_type == "SnowDepth"), #data source - selecting desired rows
+  aes(x = Year, y = meas_value, shape = meas_type, color = meas_type) #aesthetic mapping: x = year, y = temp, shape = max or min, color = max or min
+)+
+  geom_point()+ #points
+  theme_classic()+ #Making it look like baseR plots
+  labs(x = "", y = "Snow Depth (mm)", shape = "Legend", color = "Legend")+ #Labeling axes and legend
+  scale_shape_manual(values = c(17), labels = c("Snow Depth, mm"), name = "Legend")+ #adjusting shapes and labels of points
+  scale_color_manual(values = snow, labels = c("Snow Depth, mm"), name = "Legend")+ #adjusting colors and labels
+  theme(legend.position = "none", 
+            axis.title.y = element_text(size = 13), #adjusting size of axis title text
+        axis.text.y = element_text(size = 11), #adjusting size of axis labels
+        axis.text.x = element_blank(), #Removing x-axis labels
+        axis.title.x = element_blank() #removing x-axis 
+        )+
+  scale_x_continuous(limits = c(1927, 2022), n.breaks =6)
+f1c.snow
+```
+
+d. Rainfall
+
+```{r}
+f1d.rain <- ggplot(
+  filter(ysl_plot, meas_type == "AnnualRain"), #data source - selecting desired rows
+  aes(x = Year, y = meas_value, shape = meas_type, color = meas_type) #aesthetic mapping: x = year, y = temp, shape = max or min, color = max or min
+)+
+  geom_point()+ #points
+  theme_classic()+ #Making it look like baseR plots
+  labs(x = "", y = "Annual Rainfall (mm)", shape = "Legend", color = "Legend")+ #Labeling axes and legend
+  scale_shape_manual(values = c(19, 8),labels = c("Annual Rainfall, mm", "Annual Snowfall, mm"), name = "Legend")+ #adjusting shapes and labels of points
+  scale_color_manual(values = c(rain), labels = c("Annual Rainfall, mm", "Annual Snowfall, mm"), name = "Legend")+ #adjusting colors and labels
+  theme(legend.position = "none", 
+          axis.title.y = element_text(size = 13), #adjusting size of axis title text
+        axis.text.y = element_text(size = 11), #adjusting size of axis labels
+        axis.text.x = element_blank(), #Removing x-axis labels
+        axis.title.x = element_blank() #removing x-axis 
+        )+
+  scale_x_continuous(limits = c(1927, 2022), n.breaks =6)
+f1d.rain
+```
+
+
+e. Snowfall
+
+```{r}
+f1e.snow <- ggplot(
+  filter(ysl_plot, meas_type == "AnnualSnow"), #data source - selecting desired rows
+  aes(x = Year, y = meas_value, shape = meas_type, color = meas_type) #aesthetic mapping: x = year, y = temp, shape = max or min, color = max or min
+)+
+  geom_point()+ #points
+  geom_smooth(data = subset(ysl_plot, meas_type == "AnnualSnow"), #sub-setting data - only want to add trendline to annual minimum temp
+              aes(x = Year, y = meas_value), #Aesthetics - x = year, y = measurement value
+              method = "lm", se = F)+ # Make trendline linear
+  theme_classic()+ #Making it look like baseR plots
+  labs(x = "Year", y = "Annual Snowfall (mm)", shape = "Legend", color = "Legend")+ #Labeling axes and legend
+  scale_shape_manual(values = c(19, 8),labels = c("Annual Rainfall, mm", "Annual Snowfall, mm"), name = "Legend")+ #adjusting shapes and labels of points
+  scale_color_manual(values = c(snow), labels = c("Annual Rainfall, mm", "Annual Snowfall, mm"), name = "Legend")+ #adjusting colors and labels
+  theme(legend.position = "none", 
+        axis.title = element_text(size = 13), #adjusting size of axis title text
+        axis.text = element_text(size = 11) #adjusting size of axis labels
+        )+
+  scale_x_continuous(limits = c(1927, 2022), n.breaks =6)
+f1e.snow
+```
+
+Stack and save: 
+
+```{r}
+f1.5panel <- f1a.max/f1b.min/f1c.snow/f1d.rain/f1e.snow
+f1.5panel
+```
+
+```{r}
+ggsave("plots/fig1_5panel.pdf", plot = f1.5panel, device = "pdf", width = 6.5 , height = 9 , units = "in", dpi = "retina") #see above for detailed syntax
+```
+
+
+**Figure 2**
+
+a. Ice On: 
+
+```{r}
+iceon <-"#80CDC1"
+iceoff<-"#FDAE61"
+```
+
+```{r}
+f2a.on <- ggplot(
+  filter(ysl_plot, meas_type == "IceOnJulian"), #data source - selecting desired rows
+  aes(x = Year, y = meas_value, shape = meas_type, color = meas_type, fill = meas_type) #aesthetic mapping: x = year, y = temp, shape = max or min, color = max or min
+)+
+  geom_point()+ #points
+  theme_classic()+ #Making it look like baseR plots
+  labs(x = "", y = "Ice on Julian day", shape = "Legend", color = "Legend")+ #Labeling axes and legend
+  scale_shape_manual(values = c(24, 25),labels = c("Ice Off Date", "Ice On Date"), name = "Legend")+ #adjusting shapes and labels of points
+  scale_color_manual(values = iceon, labels = c("Ice Off Date", "Ice On Date"), name = "Legend")+ #adjusting colors and labels
+  scale_fill_manual(values = iceon, labels = c("Ice Off Date", "Ice On Date"), name = "Legend")+ #adjusting fill color and labels
+  theme(legend.position = "none", 
+        axis.title.y = element_text(size = 13), #adjusting size of axis title text
+        axis.text.y = element_text(size = 11), #adjusting size of axis labels
+        axis.text.x = element_blank(), #Removing x-axis labels
+        axis.title.x = element_blank() #removing x-axis 
+        )+
+  scale_x_continuous(limits = c(1927, 2022), n.breaks =6)
+f2a.on
+```
+
+b. Ice off: 
+
+```{r}
+f2b.off <- ggplot(
+  filter(ysl_plot, meas_type == "IceOffJulian"), #data source - selecting desired rows
+  aes(x = Year, y = meas_value, shape = meas_type, color = meas_type, fill = meas_type) #aesthetic mapping: x = year, y = temp, shape = max or min, color = max or min
+)+
+  geom_point()+ #points
+  theme_classic()+ #Making it look like baseR plots
+  labs(x = "Year", y = "Ice off Julian day", shape = "Legend", color = "Legend")+ #Labeling axes and legend
+  scale_shape_manual(values = c(24, 25),labels = c("Ice Off Date", "Ice On Date"), name = "Legend")+ #adjusting shapes and labels of points
+  scale_color_manual(values = iceoff, labels = c("Ice Off Date", "Ice On Date"), name = "Legend")+ #adjusting colors and labels
+  scale_fill_manual(values = iceoff, labels = c("Ice Off Date", "Ice On Date"), name = "Legend")+ #adjusting fill color and labels
+  theme(legend.position = "none", 
+        axis.title = element_text(size = 13), #adjusting size of axis title text
+        axis.text = element_text(size = 11) #adjusting size of axis labels
+        )+
+  scale_x_continuous(limits = c(1927, 2022), n.breaks =6)
+f2b.off
+```
+
+
+Stack and save: 
+
+```{r}
+f2.2panel <- f2a.on/f2b.off
+f2.2panel
+```
+
+```{r}
+ggsave("plots/fig2_2panel.pdf", plot = f2.2panel, device = "pdf", width = 6.5 , height = 4 , units = "in", dpi = "retina")#see above for detailed syntax
+```
