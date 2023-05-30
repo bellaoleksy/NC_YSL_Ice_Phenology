@@ -12,7 +12,7 @@ library(huxtable)
 
 #Look into QDO, PDO, ENSO
 
-source("scripts/functions_IAO.R")
+source("0_functions.R")
 summarize <- dplyr::summarize
 
 # Read in ice phenology data ----------------------------------------------
@@ -1345,7 +1345,7 @@ ggsave(plot=last_plot(), "Figures/GAMS_SpringMax.png",
 
 mod0_SpringTempSum <- gam(SpringTempSum ~ s(Year),
                         # family=Gamma(link="log"),
-                        data = YSLoff,
+                        data = YSLon,
                         correlation = corARMA(form = ~ 1 | Year, p = 1), 
                         #specifies the correlation argument of gam
                         method = "REML")
