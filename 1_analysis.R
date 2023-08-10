@@ -11,7 +11,6 @@ library(broom)
 library(huxtable)
 
 #Look into QDO, PDO, ENSO
-#Adding a line for test
 source("0_functions.R")
 summarize <- dplyr::summarize
 
