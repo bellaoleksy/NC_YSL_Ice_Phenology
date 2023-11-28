@@ -574,7 +574,7 @@ ggsave(plot=last_plot(), "Figures/GAMS_WinterSnow.png",
 
 # ~ Winter snow depth--------------------------------------------------------------
 
-mod0_WinterSnowDepth <- gam(WinterSnowDepth ~ s(Year),
+mod0_WinterSnowDepth <- gam(WinterSnow ~ s(Year),
                             data = YSLoff,
                             # correlation = corARMA(form = ~ 1 | Year, p = 1), 
                             #specifies the correlation argument of gam
@@ -628,7 +628,7 @@ WinterSnowDepthPred <- cbind(WinterSnowDepthPred, data.frame(incr=unlist(m1.dsig
 
 GAMS_WinterSnowDepth <- WinterSnowDepthPred %>%
   ggplot(aes(x=Year,y=fit))+
-  geom_point(data=YSLoff, aes(x=Year, y=WinterSnowDepth),
+  geom_point(data=YSLoff, aes(x=Year, y=WinterSnow),
              shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
   geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
   geom_line(aes(x=Year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
@@ -1398,7 +1398,7 @@ SumSpringTempPred <- cbind(SumSpringTempPred, data.frame(incr=unlist(m1.dsig$inc
 
 GAMS_SpringTempSum <- SumSpringTempPred %>%
   ggplot(aes(x=Year,y=fit))+
-  geom_point(data=YSLoff, aes(x=Year, y=SpringTempSum),
+  geom_point(data=YSLon, aes(x=Year, y=SpringTempSum),
              shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
   geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
   geom_line(aes(x=Year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
@@ -1530,6 +1530,7 @@ maxSummerTempPred <- cbind(years,
                              type = "response",
                              se.fit = TRUE
                            )))
+
 
 ### Calculate upper and lower bounds
 maxSummerTempPred <- transform(maxSummerTempPred,
@@ -3141,7 +3142,8 @@ ggsave("Figures/Figure2_IcePhenology.png", width=3, height=6,units="in", dpi=300
 IceOn_FallMin_vert <- IceOn_FallMin +
   theme(plot.margin=unit(c(0,0.1,0.3,0.5), "lines"),
         axis.title.y=element_blank(),
-        axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2))
+        axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2))+
+  labs(title="Ice-on")
 IceOn_FallSnow_vert <- IceOn_FallSnow +
   theme(plot.margin=unit(c(0,0.1,0.3,0.5), "lines"),
         axis.ticks.y=element_line(),
@@ -3156,7 +3158,8 @@ IceOn_FallTempSum_vert <- IceOn_FallTempSum +
 IceOff_SpringSnow_vert <- IceOff_SpringSnow +
   theme(plot.margin=unit(c(0,0.1,0.3,0.5), "lines"),
         axis.title.y=element_blank(),
-        axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2))
+        axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2))+
+  labs(title="Ice-off")
 IceOff_SpringRain_vert <- IceOff_SpringRain +
   theme(plot.margin=unit(c(0,0.1,0.3,0.5), "lines"),
         axis.ticks.y=element_line(),
@@ -3185,7 +3188,8 @@ combined <- (IceOn_FallMin_vert+ #a
                                               barwidth = 13,
                                               barheight = 1.3, 
                                               direction = 'horizontal')) &
-  theme(legend.position="bottom")
+  theme(legend.position="bottom",
+        plot.title = element_text(hjust = 0.5))
   
 combined <- combined  +
   patchwork::plot_layout(ncol = 2, guides="collect")
@@ -3198,7 +3202,7 @@ combined <- combined  +
   #   plot.tag.position = "left"
   # )
 combined
-ggsave("Figures/Figure3_GAMS_IceOn_IceOff.png", width=5, height=7,units="in", dpi=300)
+ggsave("Figures/Figure3_GAMS_IceOn_IceOff.png", width=5, height=7,units="in", dpi=600)
 
 # FIGURE 4  - predictors - ice on and off ----------------------------------------------------------------
 IceOff_nolegend <- IceOff &
@@ -3213,7 +3217,7 @@ Row2 <- ( (GAMS_SpringSnow_new+GAMS_SpringRain_new+GAMS_SnowDepth_new) +  patchw
 
 cowplot::plot_grid(Row1, Row2)
 
-ggsave("Figures/Figure4_GAMS_IceOn_IceOff_Predictors.png", width=5, height=7,units="in", dpi=300)
+ggsave("Figures/Figure4_GAMS_IceOn_IceOff_Predictors.png", width=5, height=7,units="in", dpi=600)
 
 
 
