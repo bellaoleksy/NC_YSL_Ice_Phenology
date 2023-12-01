@@ -175,3 +175,57 @@ plot.Deriv <- function(x,
   layout(1)
   invisible(x)
 }
+
+
+# Gam model function ####
+# Fit a GAM with specified `gam_formula`  
+# Make the following objects  
+# model summaries  
+# draw_plot  
+# appraise model  
+# Return a list with the following:  
+#  `lake_name`  
+# `mod` = model fit  
+# `draw_plot` = results of the `draw()` function  
+# `appraise` = results of the `apraise()` function  
+
+gam_mod_fun <- function(data, gam_formula, lake_name){
+  mod <- gam(gam_formula,
+             family=Gamma(link="log"),
+             data = data %>%
+               filter(lake == lake_name),
+             correlation = corCAR1(
+               form = ~ start_year),
+             method = "REML")
+  mod_summary <- summary(mod)
+  draw_plot <- draw(mod)
+  app_plot <- appraise(mod)
+  return(list(lake_name = lake_name,
+              mod = mod,
+              summary = mod_summary,
+              draw_plot = draw_plot,
+              appraise = app_plot))}
+
+
+# gam summary function ####
+# This function summarizes the fits from `gam_mod_fun()` above 
+# and displays output in a "tidy" format
+
+gam_summary <- function(mydata, gam_formula, group_var) {
+  group_var = enquo(group_var)
+  
+  mydata <- mydata %>% 
+    group_by(!!group_var) %>% 
+    nest() 
+  
+  mydata %>% 
+    mutate(
+      model = map(data,
+                  ~(gam(
+                    gam_formula,
+                    family=Gamma(link="log"),
+                    data = .,
+                    correlation = corCAR1(
+                      form = ~ start_year),
+                    method = "REML")))) 
+}
