@@ -9,6 +9,10 @@ library(corrplot)
 library(itsadug)
 library(broom)
 library(huxtable)
+library(lme4)
+library(lmerTest)
+library(ggeffects)
+library(officer)
 
 #Look into QDO, PDO, ENSO
 source("0_functions.R")
@@ -106,16 +110,135 @@ YSLon=do.call(data.frame,lapply(YSLon,function(value) replace(value,is.infinite(
 YSLoff<-read.csv(file="Data/R/YSLoff_Shifted.csv",header=T,sep=",") %>%
   select(-1)
 
+hist(YSLon$IceOffJulian)
+hist(YSLon$IceOnJulian)
+
+
+## Non-Yellowstone lakes
+non_ysl <- read_csv(here::here("Data/other_phenology.txt"))
+
+non_ysl <- non_ysl %>%
+  # select necessary columns
+  select(lake, lakecode, start_year, iceOn, iceOff, orig_duration) %>% 
+  # filter out lakes: 
+  filter(lakecode == "JK25"| # Lake Haukivesi
+           lakecode == "JK02"| # Lake Kallavesi
+           lakecode == "GW369"| # Lake Kallsjön
+           lakecode == "JK03"| # Näsijärvi
+           lakecode == "JK05"| # Päijänne
+           lakecode == "JK40"| # Pielinen
+           lakecode == "NG1" # Lake Baikal
+  ) %>%
+  # below is jp original
+  # caluclate on and off julian dates for water year
+  mutate(j_on_wy = hydro.day(iceOn),
+         j_off_wy = hydro.day(iceOff)) %>%
+  # filter out data only from 1927 to 2022
+  filter(start_year >= 1927, start_year <=2022) %>%
+  mutate(ice_days = j_off_wy - j_on_wy)
+
+#modify YSL dataset for binding
+ysl_ice <- YSLon %>%
+  select(Year, IceOnDate, IceOnJulian, IceOffDate, IceOffJulian) %>%
+  mutate(IceOnJulian_new = case_when(IceOnJulian > 365 ~ IceOnJulian - 365,
+                                     TRUE ~ IceOnJulian)) %>%
+  mutate(IceOn = ymd(parse_date_time(paste(Year, IceOnJulian_new), orders = "yj")),
+         IceOff = ymd(parse_date_time(paste(Year, IceOffJulian), orders = "yj")),
+         
+         j_on_wy = hydro.day(IceOn),
+         j_off_wy = hydro.day(IceOff),
+         ice_days = j_off_wy - j_on_wy,
+         start_year = Year,
+         lake = "yellowstone") %>% 
+  select(-c(IceOnDate:IceOnJulian_new))
+  
+str(ysl_ice)
+str(non_ysl)
+
+# combine data sets
+full_data <- bind_rows(non_ysl, ysl_ice)
+  # mutate(start_y_c = start_year - mean(start_year, na.rm = TRUE))
+
+
+# GAMs all lakes ----------------------------------------------------------
+
+# for-loop fitting models ####
+lake_names <- full_data %>%
+  pull(lake) %>%
+  unique()
+
+# ice-on fits ####
+ice_on_list <- list()
+for (lake in 1:length(lake_names)){
+  lake_name = lake_names[lake]
+  response_mod <- gam_mod_fun(full_data, j_on_wy~s(start_year, k=3), lake_name)
+  ice_on_list[[lake]] <- response_mod
+}
+names(ice_on_list) <- lake_names
+
+# ice-off fits
+ice_off_list <- list()
+for (lake in 1:length(lake_names)){
+  lake_name = lake_names[lake]
+  response_mod <- gam_mod_fun(full_data, j_off_wy~s(start_year, k=3), lake_name)
+  ice_off_list[[lake]] <- response_mod
+}
+names(ice_off_list) <- lake_names
+
+# ice duration fits
+ice_days_list <- list()
+for (lake in 1:length(lake_names)){
+  lake_name = lake_names[lake]
+  response_mod <- gam_mod_fun(full_data, ice_days~s(start_year, k=3), lake_name)
+  ice_days_list[[lake]] <- response_mod
+}
+names(ice_days_list) <- lake_names
+
+# save list of response lists ####
+ice_response_list = list(duration = ice_days_list,
+                         off_date = ice_off_list,
+                         on_date = ice_on_list)
+
+# gam summaries ####
+# ice-on summary ####
+on_stats <- gam_summary(full_data, j_on_wy~s(start_year), lake) %>%
+  mutate(tidied = map(model, tidy)) %>%
+  select(tidied) %>%
+  unnest(tidied) %>%
+  mutate(phenology = "ice_on") 
+on_stats
+
+# ice-off summary ####
+off_stats <- gam_summary(full_data, j_off_wy~s(start_year), lake) %>%
+  mutate(tidied = map(model, tidy)) %>%
+  select(tidied) %>%
+  unnest(tidied) %>%
+  mutate(phenology = "ice_off") 
+off_stats
+
+# ice duration summary ####
+duration_stats <- gam_summary(full_data, ice_days~s(start_year), lake) %>%
+  mutate(tidied = map(model, tidy)) %>%
+  select(tidied) %>%
+  unnest(tidied) %>%
+  mutate(phenology = "ice_duration") 
+duration_stats
+
+# write csv of gam summaries ####
+bind_rows(on_stats, off_stats, duration_stats) %>%
+  write_csv("Figures/Tables/gam_stat_table.csv")
+
+
 
 
 # ~ ANNUAL snow ----------------------------------------------------------------
 
 
 mod0_cumulSnow <- gam(AnnualSnow ~ s(Year) ,
-                 # family=Gamma(link="log"),
-                 data = YSLon,
-                 # correlation = corCAR1(form = ~ water_year),
-                 method = "REML")
+                      # family=Gamma(link="log"),
+                      data = YSLon,
+                      # correlation = corCAR1(form = ~ water_year),
+                      method = "REML")
 summary(mod0_cumulSnow)
 draw(mod0_cumulSnow)
 # report(mod0_cumulSnow)
@@ -126,28 +249,31 @@ draw(mod0_cumulSnow)
 #Test for a change in the rate of change using 1st derivatives
 #Extract years for next step
 years <- with(YSLon, data.frame(Year = seq(min(Year, na.rm=TRUE),
-                                                       max(Year, na.rm=TRUE),
-                                                       length.out = 200)))
+                                           max(Year, na.rm=TRUE),
+                                           length.out = 200)))
 
 #Create a dataframe with predicted ("fitted") values from the GAM and year, on the response scale.
 cumulSnowPred <- cbind(years,
-                    data.frame(predict(
-                      mod0_cumulSnow, years,
-                      type = "response",
-                      se.fit = TRUE
-                    )))
+                       data.frame(predict(
+                         mod0_cumulSnow, years,
+                         type = "response",
+                         se.fit = TRUE
+                       )))
 
 ### Calculate upper and lower bounds
 cumulSnowPred <- transform(cumulSnowPred,
-                        upper = fit + (2 * se.fit),
-                        lower = fit - (2 * se.fit))
+                           upper = fit + (2 * se.fit),
+                           lower = fit - (2 * se.fit))
 
 #Extract first derivative of the trend
 Term = "Year"
 m1.d <- Deriv(mod0_cumulSnow) #in theory gratia::derivatives should work here
+m1.d.2 <- gratia::derivatives(mod0_cumulSnow)
+m1.d.3 <- gratia::fderiv(mod0_cumulSnow)
 
 #Calculate confidence intervals around the first derivative
 m1.dci <- confint(m1.d, term = "Year")
+
 
 #Extract periods of increasing or decreasing trends
 m1.dsig <- signifD(cumulSnowPred$fit,
@@ -161,7 +287,7 @@ plot.Deriv(m1.d)
 
 #Add a column for periods of time when the trend is accelerating
 cumulSnowPred <- cbind(cumulSnowPred, data.frame(incr=unlist(m1.dsig$incr)),
-                          data.frame(decr=unlist(m1.dsig$decr)))
+                       data.frame(decr=unlist(m1.dsig$decr)))
 
 
 GAMS_AnnualSnow <- cumulSnowPred %>%
@@ -388,7 +514,7 @@ plot.Deriv(m1.d)
 
 #Add a column for periods of time when the trend is accelerating
 AnnualRainPred <- cbind(AnnualRainPred, data.frame(incr=unlist(m1.dsig$incr)),
-                          data.frame(decr=unlist(m1.dsig$decr)))
+                        data.frame(decr=unlist(m1.dsig$decr)))
 
 GAMS_AnnualRain <- AnnualRainPred %>%
   ggplot(aes(x=Year,y=fit))+
@@ -413,10 +539,10 @@ ggsave(plot=last_plot(), "Figures/GAMS_AnnualRain.png",
 
 
 mod0_maxSnowDepth <- gam(SnowDepth ~ s(Year),
-                      family=Gamma(link="log"),
-                      data = YSLon,
-                      # correlation = corCAR1(form = ~ Year),
-                      method = "REML")
+                         family=Gamma(link="log"),
+                         data = YSLon,
+                         # correlation = corCAR1(form = ~ Year),
+                         method = "REML")
 summary(mod0_maxSnowDepth)
 draw(mod0_maxSnowDepth)
 
@@ -427,21 +553,21 @@ draw(mod0_maxSnowDepth)
 #Test for a change in the rate of change using 1st derivatives
 #Extract years for next step
 years <- with(YSLon, data.frame(Year = seq(min(Year, na.rm=TRUE),
-                                                     max(Year, na.rm=TRUE),
-                                                     length.out = 200)))
+                                           max(Year, na.rm=TRUE),
+                                           length.out = 200)))
 
 #Create a dataframe with predicted ("fitted") values from the GAM and year, on the response scale.
 maxSnowDepthPred <- cbind(years,
-                       data.frame(predict(
-                         mod0_maxSnowDepth, years,
-                         type = "response",
-                         se.fit = TRUE
-                       )))
+                          data.frame(predict(
+                            mod0_maxSnowDepth, years,
+                            type = "response",
+                            se.fit = TRUE
+                          )))
 
 ### Calculate upper and lower bounds
 maxSnowDepthPred <- transform(maxSnowDepthPred,
-                           upper = fit + (2 * se.fit),
-                           lower = fit - (2 * se.fit))
+                              upper = fit + (2 * se.fit),
+                              lower = fit - (2 * se.fit))
 
 #Extract first derivative of the trend
 Term = "Year"
@@ -475,7 +601,7 @@ GAMS_SnowDepth <- maxSnowDepthPred %>%
   geom_ribbon(aes(ymin = (lower), ymax = (upper), x = Year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
   labs(x="Water year",y="Maximum snow depth (mm)")+
   coord_cartesian(xlim=c(1925,2025),
-  ylim=c(900,2100))+
+                  ylim=c(900,2100))+
   scale_x_continuous(breaks=seq(1930, 2020, 15))+
   # scale_y_continuous(breaks=seq(22,30,2))+
   theme_pubr(base_size=8, border=TRUE)
@@ -490,7 +616,7 @@ ggsave(plot=last_plot(), "Figures/GAMS_SnowDepth.png",
 
 GAMS_SnowDepth + GAMS_AnnualMin + GAMS_AnnualMax + GAMS_AnnualRain + GAMS_AnnualSnow +
   patchwork::plot_annotation(tag_levels = 'a',
-                  title="Annual trends")  & scale_x_continuous(breaks=c(1930,1960,1990,2020))
+                             title="Annual trends")  & scale_x_continuous(breaks=c(1930,1960,1990,2020))
 
 ggsave(plot=last_plot(), "Figures/FigureS1.AnnualTrends.png",
        dpi=600, width = 6, height = 5, units = 'in')
@@ -501,10 +627,10 @@ ggsave(plot=last_plot(), "Figures/FigureS1.AnnualTrends.png",
 # ~ Winter snow ----------------------------------------------------------------
 
 mod0_cumulWinterSnow <- gam(WinterSnow ~ s(Year),
-                          # family=Gamma(link="log"),
-                          data = YSLon,
-                          # correlation = corCAR1(form = ~ Year),
-                          method = "REML")
+                            # family=Gamma(link="log"),
+                            data = YSLon,
+                            # correlation = corCAR1(form = ~ Year),
+                            method = "REML")
 summary(mod0_cumulWinterSnow)
 draw(mod0_cumulWinterSnow)
 
@@ -520,16 +646,16 @@ years <- with(YSLon, data.frame(Year = seq(min(Year, na.rm=TRUE),
 
 #Create a dataframe with predicted ("fitted") values from the GAM and year, on the response scale.
 cumulWinterSnowPred <- cbind(years,
-                           data.frame(predict(
-                             mod0_cumulWinterSnow, years,
-                             type = "response",
-                             se.fit = TRUE
-                           )))
+                             data.frame(predict(
+                               mod0_cumulWinterSnow, years,
+                               type = "response",
+                               se.fit = TRUE
+                             )))
 
 ### Calculate upper and lower bounds
 cumulWinterSnowPred <- transform(cumulWinterSnowPred,
-                               upper = fit + (2 * se.fit),
-                               lower = fit - (2 * se.fit))
+                                 upper = fit + (2 * se.fit),
+                                 lower = fit - (2 * se.fit))
 
 #Extract first derivative of the trend
 Term = "Year"
@@ -549,7 +675,7 @@ plot.Deriv(m1.d)
 
 #Add a column for periods of time when the trend is accelerating
 cumulWinterSnowPred <- cbind(cumulWinterSnowPred, data.frame(incr=unlist(m1.dsig$incr)),
-                           data.frame(decr=unlist(m1.dsig$decr)))
+                             data.frame(decr=unlist(m1.dsig$decr)))
 
 
 GAMS_WinterSnow <- cumulWinterSnowPred %>%
@@ -652,10 +778,10 @@ ggsave(plot=last_plot(), "Figures/GAMS_WinterSnowDepth.png",
 # ~ Winter rain--------------------------------------------------------------
 
 mod0_WinterRain <- gam(WinterRain ~ s(Year),
-                     data = YSLon,
-                     # correlation = corARMA(form = ~ 1 | Year, p = 1), 
-                     #specifies the correlation argument of gam
-                     method = "REML")
+                       data = YSLon,
+                       # correlation = corARMA(form = ~ 1 | Year, p = 1), 
+                       #specifies the correlation argument of gam
+                       method = "REML")
 summary(mod0_WinterRain)
 draw(mod0_WinterRain)
 
@@ -671,16 +797,16 @@ years <- with(YSLon, data.frame(Year = seq(min(Year, na.rm=TRUE),
 
 #Create a dataframe with predicted ("fitted") values from the GAM and year, on the response scale.
 WinterRainPred <- cbind(years,
-                      data.frame(predict(
-                        mod0_WinterRain, years,
-                        type = "response",
-                        se.fit = TRUE
-                      )))
+                        data.frame(predict(
+                          mod0_WinterRain, years,
+                          type = "response",
+                          se.fit = TRUE
+                        )))
 
 ### Calculate upper and lower bounds
 WinterRainPred <- transform(WinterRainPred,
-                          upper = fit + (2 * se.fit),
-                          lower = fit - (2 * se.fit))
+                            upper = fit + (2 * se.fit),
+                            lower = fit - (2 * se.fit))
 
 #Extract first derivative of the trend
 Term = "Year"
@@ -702,7 +828,7 @@ plot.Deriv(m1.d)
 
 #Add a column for periods of time when the trend is accelerating
 WinterRainPred <- cbind(WinterRainPred, data.frame(incr=unlist(m1.dsig$incr)),
-                      data.frame(decr=unlist(m1.dsig$decr)))
+                        data.frame(decr=unlist(m1.dsig$decr)))
 
 
 GAMS_WinterRain <- WinterRainPred %>%
@@ -728,11 +854,11 @@ ggsave(plot=last_plot(), "Figures/GAMS_WinterRain.png",
 # Started here since minimum temps probably control ice formation more so than mean or max?
 
 mod0_minWinterTemp <- gam(WinterMin ~ s(Year),
-                        # family=Gamma(link="log"),
-                        data = YSLon,
-                        correlation = corARMA(form = ~ 1 | Year, p = 1), 
-                        #specifies the correlation argument of gam
-                        method = "REML")
+                          # family=Gamma(link="log"),
+                          data = YSLon,
+                          correlation = corARMA(form = ~ 1 | Year, p = 1), 
+                          #specifies the correlation argument of gam
+                          method = "REML")
 summary(mod0_minWinterTemp)
 draw(mod0_minWinterTemp)
 
@@ -748,16 +874,16 @@ years <- with(YSLon, data.frame(Year = seq(min(Year, na.rm=TRUE),
 
 #Create a dataframe with predicted ("fitted") values from the GAM and year, on the response scale.
 minWinterTempPred <- cbind(years,
-                         data.frame(predict(
-                           mod0_minWinterTemp, years,
-                           type = "response",
-                           se.fit = TRUE
-                         )))
+                           data.frame(predict(
+                             mod0_minWinterTemp, years,
+                             type = "response",
+                             se.fit = TRUE
+                           )))
 
 ### Calculate upper and lower bounds
 minWinterTempPred <- transform(minWinterTempPred,
-                             upper = fit + (2 * se.fit),
-                             lower = fit - (2 * se.fit))
+                               upper = fit + (2 * se.fit),
+                               lower = fit - (2 * se.fit))
 
 #Extract first derivative of the trend
 Term = "Year"
@@ -778,7 +904,7 @@ plot.Deriv(m1.d)
 
 #Add a column for periods of time when the trend is accelerating
 minWinterTempPred <- cbind(minWinterTempPred, data.frame(incr=unlist(m1.dsig$incr)),
-                         data.frame(decr=unlist(m1.dsig$decr)))
+                           data.frame(decr=unlist(m1.dsig$decr)))
 
 
 GAMS_WinterMin <- minWinterTempPred %>%
@@ -803,11 +929,11 @@ ggsave(plot=last_plot(), "Figures/GAMS_WinterMin.png",
 # ~ Winter max temp. ----------------------------------------------------------
 
 mod0_MaxWinterTemp <- gam(WinterMax ~ s(Year),
-                        # family=Gamma(link="log"),
-                        data = YSLon,
-                        correlation = corARMA(form = ~ 1 | Year, p = 1), 
-                        #specifies the correlation argument of gam
-                        method = "REML")
+                          # family=Gamma(link="log"),
+                          data = YSLon,
+                          correlation = corARMA(form = ~ 1 | Year, p = 1), 
+                          #specifies the correlation argument of gam
+                          method = "REML")
 summary(mod0_MaxWinterTemp)
 draw(mod0_MaxWinterTemp)
 
@@ -823,16 +949,16 @@ years <- with(YSLon, data.frame(Year = seq(min(Year, na.rm=TRUE),
 
 #Create a dataframe with predicted ("fitted") values from the GAM and year, on the response scale.
 MaxWinterTempPred <- cbind(years,
-                         data.frame(predict(
-                           mod0_MaxWinterTemp, years,
-                           type = "response",
-                           se.fit = TRUE
-                         )))
+                           data.frame(predict(
+                             mod0_MaxWinterTemp, years,
+                             type = "response",
+                             se.fit = TRUE
+                           )))
 
 ### Calculate upper and lower bounds
 MaxWinterTempPred <- transform(MaxWinterTempPred,
-                             upper = fit + (2 * se.fit),
-                             lower = fit - (2 * se.fit))
+                               upper = fit + (2 * se.fit),
+                               lower = fit - (2 * se.fit))
 
 #Extract first derivative of the trend
 Term = "Year"
@@ -853,7 +979,7 @@ plot.Deriv(m1.d)
 
 #Add a column for periods of time when the trend is accelerating
 MaxWinterTempPred <- cbind(MaxWinterTempPred, data.frame(incr=unlist(m1.dsig$incr)),
-                         data.frame(decr=unlist(m1.dsig$decr)))
+                           data.frame(decr=unlist(m1.dsig$decr)))
 
 
 GAMS_WinterMax <- MaxWinterTempPred %>%
@@ -965,10 +1091,10 @@ ggsave(plot=last_plot(), "Figures/FigureS2.WinterTrends.png",
 # ~ Spring snow ----------------------------------------------------------------
 
 mod0_cumulSpringSnow <- gam(SpringSnow ~ s(Year),
-                         # family=Gamma(link="log"),
-                         data = YSLoff,
-                         # correlation = corCAR1(form = ~ Year),
-                         method = "REML")
+                            # family=Gamma(link="log"),
+                            data = YSLoff,
+                            # correlation = corCAR1(form = ~ Year),
+                            method = "REML")
 summary(mod0_cumulSpringSnow)
 draw(mod0_cumulSpringSnow)
 
@@ -979,21 +1105,21 @@ draw(mod0_cumulSpringSnow)
 #Test for a change in the rate of change using 1st derivatives
 #Extract years for next step
 years <- with(YSLon, data.frame(Year = seq(min(Year, na.rm=TRUE),
-                                                     max(Year, na.rm=TRUE),
-                                                     length.out = 200)))
+                                           max(Year, na.rm=TRUE),
+                                           length.out = 200)))
 
 #Create a dataframe with predicted ("fitted") values from the GAM and year, on the response scale.
 cumulSpringSnowPred <- cbind(years,
-                          data.frame(predict(
-                            mod0_cumulSpringSnow, years,
-                            type = "response",
-                            se.fit = TRUE
-                          )))
+                             data.frame(predict(
+                               mod0_cumulSpringSnow, years,
+                               type = "response",
+                               se.fit = TRUE
+                             )))
 
 ### Calculate upper and lower bounds
 cumulSpringSnowPred <- transform(cumulSpringSnowPred,
-                              upper = fit + (2 * se.fit),
-                              lower = fit - (2 * se.fit))
+                                 upper = fit + (2 * se.fit),
+                                 lower = fit - (2 * se.fit))
 
 #Extract first derivative of the trend
 Term = "Year"
@@ -1014,7 +1140,7 @@ plot.Deriv(m1.d)
 
 #Add a column for periods of time when the trend is accelerating
 cumulSpringSnowPred <- cbind(cumulSpringSnowPred, data.frame(incr=unlist(m1.dsig$incr)),
-                          data.frame(decr=unlist(m1.dsig$decr)))
+                             data.frame(decr=unlist(m1.dsig$decr)))
 
 
 GAMS_SpringSnow <- cumulSpringSnowPred %>%
@@ -1043,10 +1169,10 @@ ggsave(plot=last_plot(), "Figures/GAMS_SpringSnow.png",
 # ~ Spring snow depth--------------------------------------------------------------
 
 mod0_SpringSnowDepth <- gam(SpringSnowDepth ~ s(Year),
-                       data = YSLon,
-                       # correlation = corARMA(form = ~ 1 | Year, p = 1), 
-                       #specifies the correlation argument of gam
-                       method = "REML")
+                            data = YSLon,
+                            # correlation = corARMA(form = ~ 1 | Year, p = 1), 
+                            #specifies the correlation argument of gam
+                            method = "REML")
 summary(mod0_SpringSnowDepth)
 draw(mod0_SpringSnowDepth)
 
@@ -1062,16 +1188,16 @@ years <- with(YSLon, data.frame(Year = seq(min(Year, na.rm=TRUE),
 
 #Create a dataframe with predicted ("fitted") values from the GAM and year, on the response scale.
 SpringSnowDepthPred <- cbind(years,
-                        data.frame(predict(
-                          mod0_SpringSnowDepth, years,
-                          type = "response",
-                          se.fit = TRUE
-                        )))
+                             data.frame(predict(
+                               mod0_SpringSnowDepth, years,
+                               type = "response",
+                               se.fit = TRUE
+                             )))
 
 ### Calculate upper and lower bounds
 SpringSnowDepthPred <- transform(SpringSnowDepthPred,
-                            upper = fit + (2 * se.fit),
-                            lower = fit - (2 * se.fit))
+                                 upper = fit + (2 * se.fit),
+                                 lower = fit - (2 * se.fit))
 
 #Extract first derivative of the trend
 Term = "Year"
@@ -1091,7 +1217,7 @@ plot.Deriv(m1.d)
 
 #Add a column for periods of time when the trend is accelerating
 SpringSnowDepthPred <- cbind(SpringSnowDepthPred, data.frame(incr=unlist(m1.dsig$incr)),
-                        data.frame(decr=unlist(m1.dsig$decr)))
+                             data.frame(decr=unlist(m1.dsig$decr)))
 
 
 GAMS_SpringSnowDepth <- SpringSnowDepthPred %>%
@@ -1343,11 +1469,11 @@ ggsave(plot=last_plot(), "Figures/GAMS_SpringMax.png",
 # ~ Spring cumul. temp. ----------------------------------------------------------
 
 mod0_SpringTempSum <- gam(SpringTempSum ~ s(Year),
-                        # family=Gamma(link="log"),
-                        data = YSLon,
-                        correlation = corARMA(form = ~ 1 | Year, p = 1), 
-                        #specifies the correlation argument of gam
-                        method = "REML")
+                          # family=Gamma(link="log"),
+                          data = YSLon,
+                          correlation = corARMA(form = ~ 1 | Year, p = 1), 
+                          #specifies the correlation argument of gam
+                          method = "REML")
 summary(mod0_SpringTempSum)
 draw(mod0_SpringTempSum)
 
@@ -1363,16 +1489,16 @@ years <- with(YSLon, data.frame(Year = seq(min(Year, na.rm=TRUE),
 
 #Create a dataframe with predicted ("fitted") values from the GAM and year, on the response scale.
 SumSpringTempPred <- cbind(years,
-                         data.frame(predict(
-                           mod0_SpringTempSum, years,
-                           type = "response",
-                           se.fit = TRUE
-                         )))
+                           data.frame(predict(
+                             mod0_SpringTempSum, years,
+                             type = "response",
+                             se.fit = TRUE
+                           )))
 
 ### Calculate upper and lower bounds
 SumSpringTempPred <- transform(SumSpringTempPred,
-                             upper = fit + (2 * se.fit),
-                             lower = fit - (2 * se.fit))
+                               upper = fit + (2 * se.fit),
+                               lower = fit - (2 * se.fit))
 
 #Extract first derivative of the trend
 Term = "Year"
@@ -1393,7 +1519,7 @@ plot.Deriv(m1.d)
 
 #Add a column for periods of time when the trend is accelerating
 SumSpringTempPred <- cbind(SumSpringTempPred, data.frame(incr=unlist(m1.dsig$incr)),
-                         data.frame(decr=unlist(m1.dsig$decr)))
+                           data.frame(decr=unlist(m1.dsig$decr)))
 
 
 GAMS_SpringTempSum <- SumSpringTempPred %>%
@@ -1581,11 +1707,11 @@ ggsave(plot=last_plot(), "Figures/GAMS_SummerMax.png",
 # ~ Summer cumul. temp. ----------------------------------------------------------
 
 mod0_SummerTempSum <- gam(SummerTempSum ~ s(Year),
-                        # family=Gamma(link="log"),
-                        data = YSLon,
-                        correlation = corARMA(form = ~ 1 | Year, p = 1), 
-                        #specifies the correlation argument of gam
-                        method = "REML")
+                          # family=Gamma(link="log"),
+                          data = YSLon,
+                          correlation = corARMA(form = ~ 1 | Year, p = 1), 
+                          #specifies the correlation argument of gam
+                          method = "REML")
 summary(mod0_SummerTempSum)
 draw(mod0_SummerTempSum)
 
@@ -1601,16 +1727,16 @@ years <- with(YSLon, data.frame(Year = seq(min(Year, na.rm=TRUE),
 
 #Create a dataframe with predicted ("fitted") values from the GAM and year, on the response scale.
 SumSummerTempPred <- cbind(years,
-                         data.frame(predict(
-                           mod0_SummerTempSum, years,
-                           type = "response",
-                           se.fit = TRUE
-                         )))
+                           data.frame(predict(
+                             mod0_SummerTempSum, years,
+                             type = "response",
+                             se.fit = TRUE
+                           )))
 
 ### Calculate upper and lower bounds
 SumSummerTempPred <- transform(SumSummerTempPred,
-                             upper = fit + (2 * se.fit),
-                             lower = fit - (2 * se.fit))
+                               upper = fit + (2 * se.fit),
+                               lower = fit - (2 * se.fit))
 
 #Extract first derivative of the trend
 Term = "Year"
@@ -1631,7 +1757,7 @@ plot.Deriv(m1.d)
 
 #Add a column for periods of time when the trend is accelerating
 SumSummerTempPred <- cbind(SumSummerTempPred, data.frame(incr=unlist(m1.dsig$incr)),
-                         data.frame(decr=unlist(m1.dsig$decr)))
+                           data.frame(decr=unlist(m1.dsig$decr)))
 
 
 GAMS_SummerTempSum <- SumSummerTempPred %>%
@@ -1644,7 +1770,7 @@ GAMS_SummerTempSum <- SumSummerTempPred %>%
   geom_ribbon(aes(ymin = (lower), ymax = (upper), x = Year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
   labs(x="Water year",y="Summer cumulative temperatures")+
   coord_cartesian(xlim=c(1925,2025))+
-                  # ylim=c(-200,400))+
+  # ylim=c(-200,400))+
   scale_x_continuous(breaks=seq(1930, 2020, 15))+
   # scale_y_continuous(breaks=seq(-200,400,200))+
   theme_pubr(base_size=8, border=TRUE)
@@ -1658,10 +1784,10 @@ ggsave(plot=last_plot(), "Figures/GAMS_SummerTempSum.png",
 # ~ Summer snow ----------------------------------------------------------------
 
 mod0_cumulSummerSnow <- gam(SummerSnow ~ s(Year),
-                          # family=Gamma(link="log"),
-                          data = YSLon,
-                          # correlation = corCAR1(form = ~ Year),
-                          method = "REML")
+                            # family=Gamma(link="log"),
+                            data = YSLon,
+                            # correlation = corCAR1(form = ~ Year),
+                            method = "REML")
 summary(mod0_cumulSummerSnow)
 draw(mod0_cumulSummerSnow)
 
@@ -1677,16 +1803,16 @@ years <- with(YSLon, data.frame(Year = seq(min(Year, na.rm=TRUE),
 
 #Create a dataframe with predicted ("fitted") values from the GAM and year, on the response scale.
 cumulSummerSnowPred <- cbind(years,
-                           data.frame(predict(
-                             mod0_cumulSummerSnow, years,
-                             type = "response",
-                             se.fit = TRUE
-                           )))
+                             data.frame(predict(
+                               mod0_cumulSummerSnow, years,
+                               type = "response",
+                               se.fit = TRUE
+                             )))
 
 ### Calculate upper and lower bounds
 cumulSummerSnowPred <- transform(cumulSummerSnowPred,
-                               upper = fit + (2 * se.fit),
-                               lower = fit - (2 * se.fit))
+                                 upper = fit + (2 * se.fit),
+                                 lower = fit - (2 * se.fit))
 
 #Extract first derivative of the trend
 Term = "Year"
@@ -1706,7 +1832,7 @@ plot.Deriv(m1.d)
 
 #Add a column for periods of time when the trend is accelerating
 cumulSummerSnowPred <- cbind(cumulSummerSnowPred, data.frame(incr=unlist(m1.dsig$incr)),
-                           data.frame(decr=unlist(m1.dsig$decr)))
+                             data.frame(decr=unlist(m1.dsig$decr)))
 
 
 GAMS_SummerSnow <- cumulSummerSnowPred %>%
@@ -1734,10 +1860,10 @@ ggsave(plot=last_plot(), "Figures/GAMS_SummerSnow.png",
 # ~ Summer rain--------------------------------------------------------------
 
 mod0_SummerRain <- gam(SummerRain ~ s(Year),
-                     data = YSLon,
-                     # correlation = corARMA(form = ~ 1 | Year, p = 1), 
-                     #specifies the correlation argument of gam
-                     method = "REML")
+                       data = YSLon,
+                       # correlation = corARMA(form = ~ 1 | Year, p = 1), 
+                       #specifies the correlation argument of gam
+                       method = "REML")
 summary(mod0_SummerRain)
 draw(mod0_SummerRain)
 
@@ -1753,16 +1879,16 @@ years <- with(YSLon, data.frame(Year = seq(min(Year, na.rm=TRUE),
 
 #Create a dataframe with predicted ("fitted") values from the GAM and year, on the response scale.
 SummerRainPred <- cbind(years,
-                      data.frame(predict(
-                        mod0_SummerRain, years,
-                        type = "response",
-                        se.fit = TRUE
-                      )))
+                        data.frame(predict(
+                          mod0_SummerRain, years,
+                          type = "response",
+                          se.fit = TRUE
+                        )))
 
 ### Calculate upper and lower bounds
 SummerRainPred <- transform(SummerRainPred,
-                          upper = fit + (2 * se.fit),
-                          lower = fit - (2 * se.fit))
+                            upper = fit + (2 * se.fit),
+                            lower = fit - (2 * se.fit))
 
 #Extract first derivative of the trend
 Term = "Year"
@@ -1784,7 +1910,7 @@ plot.Deriv(m1.d)
 
 #Add a column for periods of time when the trend is accelerating
 SummerRainPred <- cbind(SummerRainPred, data.frame(incr=unlist(m1.dsig$incr)),
-                      data.frame(decr=unlist(m1.dsig$decr)))
+                        data.frame(decr=unlist(m1.dsig$decr)))
 
 
 GAMS_SummerRain <- SummerRainPred %>%
@@ -2032,8 +2158,8 @@ GAMS_FallMin <- minFallTempPred %>%
   geom_point(data=YSLon, aes(x=Year, y=FallMin),
              shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
   geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
-  geom_line(aes(x=Year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
-  geom_line(aes(x=Year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  geom_line(aes(x=Year, y=incr), color="red", linewidth=2, alpha=0.8)+ #Highlight period of increasing trend
+  geom_line(aes(x=Year, y=decr), color="blue", linewidth=2, alpha=0.8)+ #Highlight period of increasing trend
   geom_ribbon(aes(ymin = (lower), ymax = (upper), x = Year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
   labs(x="Water year",y="Fall minimum temperature")+
   coord_cartesian(xlim=c(1925,2025))+
@@ -2213,11 +2339,11 @@ ggsave(plot=last_plot(), "Figures/FigureS5.FallTrends.png",
 # ~ MODELS - ICE ON ----------------------------------------------------------------
 
 ### I added Family Gamma here since observations are always > 0
-mod0_iceOn <- gam(IceOnJulian ~ s(Year),
-                        family=Gamma(link="log"),
-                        data = YSLon,
-                        correlation = corCAR1(form = ~ Year),
-                        method = "REML")
+mod0_iceOn <- gam(j_on_wy ~ s(start_year),
+                  family=Gamma(link="log"),
+                  data = ysl_ice,
+                  correlation = corCAR1(form = ~ Year),
+                  method = "REML")
 summary(mod0_iceOn)
 draw(mod0_iceOn)
 appraise(mod0_iceOn)
@@ -2229,6 +2355,7 @@ ggplot(ACF, aes(x = Lag, y = ACF)) +
   geom_hline(aes(yintercept = 0)) +
   geom_segment(mapping = aes(xend = Lag, yend = 0))
 #Suggests that an AR(1) model isn't necessary
+
 
 ### I added Family Gamma here since observations are always > 0
 mod1_iceOn <- gam(IceOnJulian ~ s(FallMin)+s(FallMax)+s(FallRain)+s(FallSnow)+
@@ -2275,7 +2402,7 @@ draw(mod4_iceOn)
 appraise(mod4_iceOn)
 
 
-#How to compare the fits of multiple GAMs models? 
+#How to compare the fits of multiple GAMs models?
 #Would be worth digging into more but found this as a solution:
 #https://rdrr.io/cran/itsadug/man/compareML.html
 #From the documentation: "This method is preferred over other functions such as AIC for models that include an AR1 model or random effects (especially nonlinear random smooths using bs='fs'). CompareML also reports the AIC difference, but that value should be treated with care."
@@ -2307,7 +2434,7 @@ new_data <-
            length = 200
          ),
          FallSnow = median(FallSnow, na.rm =
-                               TRUE),
+                             TRUE),
          FallTempSum = median(FallTempSum, na.rm=TRUE)
        ))
 
@@ -2315,8 +2442,8 @@ ilink <- family(mod3_iceOn)$linkinv
 pred_FallMin <- predict(mod3_iceOn, new_data, type = "link", se.fit = TRUE)
 pred_FallMin <- cbind(pred_FallMin, new_data)
 pred_FallMin <- transform(pred_FallMin, lwr_ci = ilink(fit - (2 * se.fit)),
-                             upr_ci = ilink(fit + (2 * se.fit)),
-                             fitted = ilink(fit))
+                          upr_ci = ilink(fit + (2 * se.fit)),
+                          fitted = ilink(fit))
 
 pred_FallMin <- pred_FallMin %>%
   select(FallMin, lwr_ci:fitted) %>%
@@ -2372,7 +2499,7 @@ new_data <-
            length = 200
          ),
          FallMin = median(FallMin, na.rm =
-                             TRUE),
+                            TRUE),
          FallTempSum = median(FallTempSum, na.rm=TRUE)
        ))
 
@@ -2380,8 +2507,8 @@ ilink <- family(mod3_iceOn)$linkinv
 pred_FallSnow <- predict(mod3_iceOn, new_data, type = "link", se.fit = TRUE)
 pred_FallSnow <- cbind(pred_FallSnow, new_data)
 pred_FallSnow <- transform(pred_FallSnow, lwr_ci = ilink(fit - (2 * se.fit)),
-                          upr_ci = ilink(fit + (2 * se.fit)),
-                          fitted = ilink(fit))
+                           upr_ci = ilink(fit + (2 * se.fit)),
+                           fitted = ilink(fit))
 pred_FallSnow <- pred_FallSnow %>%
   select(FallSnow, lwr_ci:fitted) %>%
   dplyr::rename(lwr_ci_FallSnow = lwr_ci,
@@ -2407,15 +2534,15 @@ IceOn_FallSnow<-
        # x="SpringSnow Formula: TempMax in degC, 17 day window, 0 degC threshold",
        y="Ice-on date")+
   scale_y_continuous(breaks=breaks_IceOn,labels=c("06-Dec","16-Dec","26-Dec","06-Jan","16-Jan","26-Jan"))+
-  scale_x_continuous(breaks=c(0,75,150,225,300,375),limits=c(0,400))+
+  # scale_x_continuous(breaks=c(0,75,150,225,300,375),limits=c(0,400))+
   grafify::scale_fill_grafify(palette = "grey_conti", name = "Year")+ #yellow_conti scheme
   theme_pubr(border=TRUE, base_size=8)+
   theme(
-        axis.text.y=element_blank(),
-        axis.ticks.y=element_blank(),
-        axis.title.y=element_blank(),
-        plot.margin=unit(c(0.5,0,0.5,0), "lines"),
-        axis.ticks.length.y = unit(0, "pt"))+
+    axis.text.y=element_blank(),
+    axis.ticks.y=element_blank(),
+    axis.title.y=element_blank(),
+    plot.margin=unit(c(0.5,0,0.5,0), "lines"),
+    axis.ticks.length.y = unit(0, "pt"))+
   geom_text(data=panelLetter.normal,
             aes(x=xpos,
                 y=ypos,
@@ -2446,8 +2573,8 @@ ilink <- family(mod3_iceOn)$linkinv
 pred_FallTempSum <- predict(mod3_iceOn, new_data, type = "link", se.fit = TRUE)
 pred_FallTempSum <- cbind(pred_FallTempSum, new_data)
 pred_FallTempSum <- transform(pred_FallTempSum, lwr_ci = ilink(fit - (2 * se.fit)),
-                           upr_ci = ilink(fit + (2 * se.fit)),
-                           fitted = ilink(fit))
+                              upr_ci = ilink(fit + (2 * se.fit)),
+                              fitted = ilink(fit))
 pred_FallTempSum <- pred_FallTempSum %>%
   select(FallTempSum, lwr_ci:fitted) %>%
   dplyr::rename(lwr_ci_FallTempSum = lwr_ci,
@@ -2478,10 +2605,10 @@ IceOn_FallTempSum<-
   theme_pubr(border=TRUE, base_size=8)+
   theme(
     # axis.text.y=element_blank(),
-        # axis.ticks.y=element_blank(),
-        axis.title.y=element_blank(),
-        plot.margin=unit(c(0.5,0,0.5,0), "lines"),
-        axis.ticks.length.y = unit(0, "pt"))+
+    # axis.ticks.y=element_blank(),
+    axis.title.y=element_blank(),
+    plot.margin=unit(c(0.5,0,0.5,0), "lines"),
+    axis.ticks.length.y = unit(0, "pt"))+
   geom_text(data=panelLetter.normal,
             aes(x=xpos,
                 y=ypos,
@@ -2491,90 +2618,11 @@ IceOn_FallTempSum<-
                 fontface="bold"))
 
 
-# 
-# 
-# # ... Panel D -- Ice On vs. Summer Max  -------------------------------------
-# visreg::visreg2d(mod3_iceOn, xvar='FallTempSum', yvar='FallSnow', scale='response')
-# 
-# plot(YSLon$FallMax, YSLon$SummerMax)
-# 
-# new_data <-
-#   with(YSLon,
-#        expand.grid(
-#          SummerTempSum = seq(
-#            min(SummerTempSum, na.rm = TRUE),
-#            max(SummerTempSum, na.rm =
-#                  TRUE),
-#            length = 200
-#          ),
-#          FallMin = median(FallMin, na.rm =
-#                             TRUE),
-#          FallSnow = median(FallSnow, na.rm=TRUE),
-#          FallTempSum = median(FallTempSum, na.rm=TRUE)
-#        ))
-# 
-# ilink <- family(mod3_iceOn)$linkinv
-# pred_SummerTempSum <- predict(mod3_iceOn, new_data, type = "link", se.fit = TRUE)
-# pred_SummerTempSum <- cbind(pred_SummerTempSum, new_data)
-# pred_SummerTempSum <- transform(pred_SummerTempSum, lwr_ci = ilink(fit - (2 * se.fit)),
-#                           upr_ci = ilink(fit + (2 * se.fit)),
-#                           fitted = ilink(fit))
-# pred_SummerTempSum <- pred_SummerTempSum %>%
-#   select(SummerTempSum, lwr_ci:fitted) %>%
-#   dplyr::rename(lwr_ci_SummerTempSum = lwr_ci,
-#                 upr_ci_SummerTempSum = upr_ci,
-#                 fitted_SummerTempSum = fitted)
-# 
-# #Modify axis labels: fed DOY -> dates
-# # labels_IceOnDayofYear_fed<-c(50,70,90,110,130)
-# # labels_IsoMax_fed<-c(70,90,110)
-# #To figure out conversion of FED DOY to Date use something like: as.Date(274+110, origin="2014-01-02")
-# 
-# 
-# IceOn_SummerTempSum<-
-#   ggplot(pred_SummerTempSum, aes(x = SummerTempSum, y = fitted_SummerTempSum)) +
-#   geom_ribbon(aes(ymin = lwr_ci_SummerTempSum, ymax = upr_ci_SummerTempSum), alpha = 0.2) +
-#   geom_line() +
-#   geom_point(data=YSLon, aes(x=SummerTempSum,
-#                              y=IceOnJulian,
-#                              fill=Year), 
-#              shape=21,alpha=0.9)+
-#   labs(x="Summer cumulative temperatures",
-#        # x=expression(Iso["max,"]["17day,"]["0°C"]),
-#        # x="SpringSnow Formula: TempMax in degC, 17 day window, 0 degC threshold",
-#        y="Ice-on date")+
-#   scale_y_continuous(breaks=breaks_IceOn,labels=c("06-Dec","16-Dec","26-Dec","06-Jan","16-Jan","26-Jan"))+
-#   # scale_x_continuous(breaks=labels_IsoMax_fed,labels=c("12-Dec","01-Jan","21-Jan"),limits=c(70,120))+
-#   grafify::scale_fill_grafify(palette = "grey_conti", name = "Year")+ #yellow_conti scheme
-#   theme_pubr(border=TRUE, base_size=8)+
-#   theme(axis.text.y=element_blank(),
-#         axis.ticks.y=element_blank(),
-#         axis.title.y=element_blank(),
-#         plot.margin=unit(c(0.5,0,0.5,0), "lines"),
-#         axis.ticks.length.y = unit(0, "pt"))+
-#   geom_text(data=panelLetter.normal,
-#             aes(x=xpos,
-#                 y=ypos,
-#                 hjust=hjustvar,
-#                 vjust=vjustvar,
-#                 label="d",
-#                 fontface="bold"))
-
-#...Composite Ice On Figure----------------------------------------
-
-
-
-IceOn<-(IceOn_FallMin+IceOn_FallSnow+IceOn_FallTempSum) + patchwork::plot_layout(ncol = 3, guides="collect") & theme(legend.position="top")
-IceOn
-
-ggsave("Figures/GAMS_IceOn.png", plot=IceOn, width=10, height=3.5,units="in", dpi=300)
-
-
 
 #...Ice On  predictor trends----------------------------------------
 
 
-
+# 
 GAMS_FallMin_new <-GAMS_FallMin +
   geom_text(data=panelLetter.normal,
             aes(x=xpos,
@@ -2586,7 +2634,9 @@ GAMS_FallMin_new <-GAMS_FallMin +
   theme(plot.margin=unit(c(0,0,0,0), "lines"),
         axis.text.x = element_blank(),
         axis.ticks.x = element_blank(),
-        axis.title.x = element_blank())
+        axis.title.x = element_blank(),
+        plot.title = element_text(hjust = 0.5))+
+  labs(title="Ice-on")
 
 GAMS_FallSnow_new <-GAMS_FallSnow +
   geom_text(data=panelLetter.normal,
@@ -2612,27 +2662,27 @@ GAMS_FallTempSum_new <-GAMS_FallTempSum +
                 fontface="bold"))+
   theme(plot.margin=unit(c(0,0,0,0), "lines"))
 
-# GAMS_SummerTempSum_new <- GAMS_SummerTempSum +
-#   geom_text(data=panelLetter.normal,
-#             aes(x=xpos,
-#                 y=ypos,
-#                 hjust=hjustvar,
-#                 vjust=vjustvar,
-#                 label="d",
-#                 fontface="bold"))
-
-
-IceOn_preds <- (GAMS_FallMin_new+GAMS_FallSnow_new+GAMS_FallTempSum_new)+
-  patchwork::plot_layout(ncol = 3)
-IceOn_preds & scale_x_continuous(breaks=c(1930,1960,1990,2020))
-
-
-ggsave("Figures/GAMS_IceOn_Predictors.png", plot=IceOn_preds, width=10, height=3.5,units="in", dpi=300)
-
-
-IceOn / IceOn_preds
-
-ggsave("Figures/GAMS_IceOn_WithPredictors.png", width=10, height=5,units="in", dpi=300)
+GAMS_SummerTempSum_new <- GAMS_SummerTempSum +
+  geom_text(data=panelLetter.normal,
+            aes(x=xpos,
+                y=ypos,
+                hjust=hjustvar,
+                vjust=vjustvar,
+                label="d",
+                fontface="bold"))
+# 
+# 
+# IceOn_preds <- (GAMS_FallMin_new+GAMS_FallSnow_new+GAMS_FallTempSum_new)+
+#   patchwork::plot_layout(ncol = 3)
+# IceOn_preds & scale_x_continuous(breaks=c(1930,1960,1990,2020))
+# 
+# 
+# ggsave("Figures/GAMS_IceOn_Predictors.png", plot=IceOn_preds, width=10, height=3.5,units="in", dpi=300)
+# 
+# 
+# IceOn / IceOn_preds
+# 
+# ggsave("Figures/GAMS_IceOn_WithPredictors.png", width=10, height=5,units="in", dpi=300)
 
 
 # ~ MODELS - ICE OFF----------------------------------------------------------------
@@ -2640,12 +2690,21 @@ ggsave("Figures/GAMS_IceOn_WithPredictors.png", width=10, height=5,units="in", d
 #Distribution of y
 hist(YSLon$IceOffJulian)
 
-### I added Family Gamma here since observatiOffs are always > 0
-mod0_iceOff <- gam(IceOffJulian ~ s(Year),
-                  family=Gamma(link="log"),
-                  data = YSLoff,
-                  # correlatiOff = corCAR1(form = ~ Year),
-                  method = "REML")
+### I added Family Gamma here since observations are always > 0
+# mod0_iceOff <- gam(IceOffJulian ~ s(Year),
+#                    family=Gamma(link="log"),
+#                    data = YSLoff,
+#                    # correlatiOff = corCAR1(form = ~ Year),
+#                    method = "REML")
+# summary(mod0_iceOff)
+# draw(mod0_iceOff)
+# appraise(mod0_iceOff)
+
+mod0_iceOff <- gam(j_off_wy ~ s(start_year),
+                   family=Gamma(link="log"),
+                   data = ysl_ice,
+                   # correlatiOff = corCAR1(form = ~ Year),
+                   method = "REML")
 summary(mod0_iceOff)
 draw(mod0_iceOff)
 appraise(mod0_iceOff)
@@ -2658,12 +2717,12 @@ appraise(mod0_iceOff)
 #   geom_segment(mapping = aes(xend = Lag, yend = 0))
 #Suggests that an AR(1) model isn't necessary
 
-### I added Family Gamma here since observatiOffs are always > 0
+## I added Family Gamma here since observatiOffs are always > 0
 mod1_iceOff <- gam(IceOffJulian ~ s(WinterSnow)+ s(SnowDepth) + s(SpringSnow)+ s(SpringRain) + s(WinterMin)+ s(SpringMin) + s(SpringMax),
-                  family=Gamma(link="log"),
-                  data = YSLoff,
-                  # correlatiOff = corCAR1(form = ~ Year),
-                  method = "REML")
+                   family=Gamma(link="log"),
+                   data = YSLoff,
+                   # correlatiOff = corCAR1(form = ~ Year),
+                   method = "REML")
 summary(mod1_iceOff)
 draw(mod1_iceOff)
 appraise(mod1_iceOff)
@@ -2671,10 +2730,10 @@ appraise(mod1_iceOff)
 
 ### I added Family Gamma here since observatiOffs are always > 0
 mod2_iceOff <- gam(IceOffJulian ~  s(WinterSnow)+ s(SnowDepth) + s(SpringRain) +s(SpringSnow)+ s(WinterMin)+ s(SpringMax),
-                  family=Gamma(link="log"),
-                  data = YSLoff,
-                  # correlatiOff = corCAR1(form = ~ Year),
-                  method = "REML")
+                   family=Gamma(link="log"),
+                   data = YSLoff,
+                   # correlatiOff = corCAR1(form = ~ Year),
+                   method = "REML")
 summary(mod2_iceOff)
 draw(mod2_iceOff)
 appraise(mod2_iceOff)
@@ -2708,49 +2767,49 @@ mod5_iceOff <- gam(IceOffJulian ~  s(SnowDepth) + s(SpringRain) +s(SpringSnow),
 summary(mod5_iceOff)
 draw(mod5_iceOff)
 appraise(mod5_iceOff)
-
-#How to compare the fits of multiple GAMs models? 
-#Would be worth digging into more but found this as a solutiOff:
-#https://rdrr.io/cran/itsadug/man/compareML.html
-#From the documentatiOff: "This method is preferred over other functiOffs such as AIC for models that include an AR1 model or random effects (especially nOfflinear random smooths using bs='fs'). CompareML also reports the AIC difference, but that value should be treated with care."
-
-compareML(mod0_iceOff, mod1_iceOff) 
-compareML(mod1_iceOff, mod2_iceOff)
-compareML(mod2_iceOff, mod3_iceOff)
-compareML(mod3_iceOff, mod4_iceOff)
-compareML(mod4_iceOff, mod5_iceOff)
-
-
-visreg::visreg2d(mod2_iceOff, xvar='SnowDepth', yvar='SpringSnow', scale='response')
-visreg::visreg2d(mod4_iceOff, xvar='SnowDepth', yvar='SpringSnow', scale='response')
-visreg::visreg2d(mod2_iceOff, xvar='SpringSnow', yvar='SpringRain', scale='response')
-
-
-#Top 3 models 
-
-
-#Effective degrees of freedom (as a metric for model complexity)
-sum(influence(mod2_iceOff))
-sum(influence(mod3_iceOff))
-sum(influence(mod4_iceOff))
-
-#terms
-mod2_iceOff$terms
-mod3_iceOff$terms
-mod4_iceOff$terms
-
-#AIC
-mod1_iceOff$aic
-mod2_iceOff$aic
-mod3_iceOff$aic
-mod4_iceOff$aic
-
-#Dev explained
-summary(mod2_iceOff)$dev.expl
-summary(mod3_iceOff)$dev.expl
-summary(mod4_iceOff)$dev.expl
-summary(mod5_iceOff)$dev.expl
-
+# 
+# #How to compare the fits of multiple GAMs models? 
+# #Would be worth digging into more but found this as a solutiOff:
+# #https://rdrr.io/cran/itsadug/man/compareML.html
+# #From the documentatiOff: "This method is preferred over other functiOffs such as AIC for models that include an AR1 model or random effects (especially nOfflinear random smooths using bs='fs'). CompareML also reports the AIC difference, but that value should be treated with care."
+# 
+# compareML(mod0_iceOff, mod1_iceOff) 
+# compareML(mod1_iceOff, mod2_iceOff)
+# compareML(mod2_iceOff, mod3_iceOff)
+# compareML(mod3_iceOff, mod4_iceOff)
+# compareML(mod4_iceOff, mod5_iceOff)
+# 
+# 
+# visreg::visreg2d(mod2_iceOff, xvar='SnowDepth', yvar='SpringSnow', scale='response')
+# visreg::visreg2d(mod4_iceOff, xvar='SnowDepth', yvar='SpringSnow', scale='response')
+# visreg::visreg2d(mod2_iceOff, xvar='SpringSnow', yvar='SpringRain', scale='response')
+# 
+# 
+# #Top 3 models 
+# 
+# 
+# #Effective degrees of freedom (as a metric for model complexity)
+# sum(influence(mod2_iceOff))
+# sum(influence(mod3_iceOff))
+# sum(influence(mod4_iceOff))
+# 
+# #terms
+# mod2_iceOff$terms
+# mod3_iceOff$terms
+# mod4_iceOff$terms
+# 
+# #AIC
+# mod1_iceOff$aic
+# mod2_iceOff$aic
+# mod3_iceOff$aic
+# mod4_iceOff$aic
+# 
+# #Dev explained
+# summary(mod2_iceOff)$dev.expl
+# summary(mod3_iceOff)$dev.expl
+# summary(mod4_iceOff)$dev.expl
+# summary(mod5_iceOff)$dev.expl
+# 
 
 
 # ---- Ice Off Figure ---- ------------------------------------------------
@@ -2783,7 +2842,7 @@ new_data <-
            length = 200
          ),
          SpringRain = median(SpringRain, na.rm =
-                                      TRUE),
+                               TRUE),
          SnowDepth = median(SnowDepth, na.rm=TRUE),
          WinterMin = median(WinterMin, na.rm=TRUE),
          SpringMax = median(SpringMax, na.rm=TRUE)
@@ -2793,13 +2852,13 @@ ilink <- family(mod3_iceOff)$linkinv
 pred_SpringSnow <- predict(mod3_iceOff, new_data, type = "link", se.fit = TRUE)
 pred_SpringSnow <- cbind(pred_SpringSnow, new_data)
 pred_SpringSnow <- transform(pred_SpringSnow, lwr_ci = ilink(fit - (2 * se.fit)),
-                           upr_ci = ilink(fit + (2 * se.fit)),
-                           fitted = ilink(fit))
+                             upr_ci = ilink(fit + (2 * se.fit)),
+                             fitted = ilink(fit))
 pred_SpringSnow <- pred_SpringSnow %>%
   select(SpringSnow, lwr_ci:fitted) %>%
   dplyr::rename(lwr_ci_SpringSnow = lwr_ci,
-         upr_ci_SpringSnow = upr_ci,
-         fitted_SpringSnow = fitted)
+                upr_ci_SpringSnow = upr_ci,
+                fitted_SpringSnow = fitted)
 
 #Modify axis labels: 
 breaks_IceOff<-c(120,130,140,150,160)
@@ -2812,8 +2871,8 @@ IceOff_SpringSnow<-
   geom_ribbon(aes(ymin = lwr_ci_SpringSnow, ymax = upr_ci_SpringSnow), alpha = 0.2) +
   geom_line() +
   geom_point(data=YSLoff, aes(x=SpringSnow,
-                             y=IceOffJulian,
-                             fill=Year), 
+                              y=IceOffJulian,
+                              fill=Year), 
              shape=21, alpha=0.9)+
   labs(x="Cumulative spring snow (mm)",
        y="Ice-off date")+
@@ -2834,34 +2893,34 @@ IceOff_SpringSnow<-
 # ...Panel B -- Ice Off vs. Spring Rain -----------------------------------
 
 
-  new_data <-
-    with(YSLoff,
-         expand.grid(
-           SpringRain = seq(
-             min(SpringRain, na.rm = TRUE),
-             max(SpringRain, na.rm =
-                   TRUE),
-             length = 200
-           ),
-           SpringSnow = median(SpringSnow, na.rm =
-                                 TRUE),
-           SnowDepth = median(SnowDepth, na.rm=TRUE),
-           WinterMin = median(WinterMin, na.rm=TRUE),
-           SpringMax = median(SpringMax, na.rm=TRUE)
-         ))
-         
-  
-  ilink <- family(mod3_iceOff)$linkinv
-  pred_SpringRain <- predict(mod3_iceOff, new_data, type = "link", se.fit = TRUE)
-  pred_SpringRain <- cbind(pred_SpringRain, new_data)
-  pred_SpringRain <- transform(pred_SpringRain, lwr_ci = ilink(fit - (2 * se.fit)),
-                               upr_ci = ilink(fit + (2 * se.fit)),
-                               fitted = ilink(fit))
-  pred_SpringRain <- pred_SpringRain %>%
-    select(SpringRain, lwr_ci:fitted) %>%
-    dplyr::rename(lwr_ci_SpringRain = lwr_ci,
-                  upr_ci_SpringRain = upr_ci,
-                  fitted_SpringRain = fitted)
+new_data <-
+  with(YSLoff,
+       expand.grid(
+         SpringRain = seq(
+           min(SpringRain, na.rm = TRUE),
+           max(SpringRain, na.rm =
+                 TRUE),
+           length = 200
+         ),
+         SpringSnow = median(SpringSnow, na.rm =
+                               TRUE),
+         SnowDepth = median(SnowDepth, na.rm=TRUE),
+         WinterMin = median(WinterMin, na.rm=TRUE),
+         SpringMax = median(SpringMax, na.rm=TRUE)
+       ))
+
+
+ilink <- family(mod3_iceOff)$linkinv
+pred_SpringRain <- predict(mod3_iceOff, new_data, type = "link", se.fit = TRUE)
+pred_SpringRain <- cbind(pred_SpringRain, new_data)
+pred_SpringRain <- transform(pred_SpringRain, lwr_ci = ilink(fit - (2 * se.fit)),
+                             upr_ci = ilink(fit + (2 * se.fit)),
+                             fitted = ilink(fit))
+pred_SpringRain <- pred_SpringRain %>%
+  select(SpringRain, lwr_ci:fitted) %>%
+  dplyr::rename(lwr_ci_SpringRain = lwr_ci,
+                upr_ci_SpringRain = upr_ci,
+                fitted_SpringRain = fitted)
 
 
 IceOff_SpringRain<-
@@ -2890,80 +2949,80 @@ IceOff_SpringRain<-
                 label="e",
                 fontface="bold"))
 
-  
+
 
 # ...Panel C - Ice off versus Snow Depth ----------------------------------
-  new_data <-
-    with(YSLoff,
-         expand.grid(
-           SnowDepth = seq(
-             min(SnowDepth, na.rm = TRUE),
-             max(SnowDepth, na.rm =
-                   TRUE),
-             length = 200
-           ),
-           SpringSnow = median(SpringSnow, na.rm =
-                                 TRUE),
-           SpringRain = median(SpringRain, na.rm=TRUE),
-           WinterMin = median(WinterMin, na.rm=TRUE),
-           SpringMax = median(SpringMax, na.rm=TRUE)
-         ))
-  
-  ilink <- family(mod3_iceOff)$linkinv
-  pred_SnowDepth <- predict(mod3_iceOff, new_data, type = "link", se.fit = TRUE)
-  pred_SnowDepth <- cbind(pred_SnowDepth, new_data)
-  pred_SnowDepth <- transform(pred_SnowDepth, lwr_ci = ilink(fit - (2 * se.fit)),
-                               upr_ci = ilink(fit + (2 * se.fit)),
-                               fitted = ilink(fit))
-  pred_SnowDepth <- pred_SnowDepth %>%
-    select(SnowDepth, lwr_ci:fitted) %>%
-    dplyr::rename(lwr_ci_SnowDepth = lwr_ci,
-                  upr_ci_SnowDepth = upr_ci,
-                  fitted_SnowDepth = fitted)
-  
-  
-  IceOff_SnowDepth<-
+new_data <-
+  with(YSLoff,
+       expand.grid(
+         SnowDepth = seq(
+           min(SnowDepth, na.rm = TRUE),
+           max(SnowDepth, na.rm =
+                 TRUE),
+           length = 200
+         ),
+         SpringSnow = median(SpringSnow, na.rm =
+                               TRUE),
+         SpringRain = median(SpringRain, na.rm=TRUE),
+         WinterMin = median(WinterMin, na.rm=TRUE),
+         SpringMax = median(SpringMax, na.rm=TRUE)
+       ))
+
+ilink <- family(mod3_iceOff)$linkinv
+pred_SnowDepth <- predict(mod3_iceOff, new_data, type = "link", se.fit = TRUE)
+pred_SnowDepth <- cbind(pred_SnowDepth, new_data)
+pred_SnowDepth <- transform(pred_SnowDepth, lwr_ci = ilink(fit - (2 * se.fit)),
+                            upr_ci = ilink(fit + (2 * se.fit)),
+                            fitted = ilink(fit))
+pred_SnowDepth <- pred_SnowDepth %>%
+  select(SnowDepth, lwr_ci:fitted) %>%
+  dplyr::rename(lwr_ci_SnowDepth = lwr_ci,
+                upr_ci_SnowDepth = upr_ci,
+                fitted_SnowDepth = fitted)
+
+
+IceOff_SnowDepth<-
   ggplot(pred_SnowDepth, aes(x = SnowDepth, y = fitted_SnowDepth)) +
-    geom_ribbon(aes(ymin = lwr_ci_SnowDepth, ymax = upr_ci_SnowDepth), alpha = 0.2) +
-    geom_line() +
-    geom_point(data=YSLoff, aes(x=SnowDepth,
-                                y=IceOffJulian,
-                                fill=Year), 
-               shape=21, alpha=0.9)+
-    labs(x="Maximum snow depth (mm)",
-         y="Ice off")+
-    grafify::scale_fill_grafify(palette = "grey_conti", name = "Year")+ #yellow_conti scheme
-    scale_y_continuous(breaks=breaks_IceOff,labels=c("30-Apr","10-May","20-May","30-May","09-Jun"),limits=c(120,160))+
-    theme_pubr(border=TRUE, base_size=8)+
-    theme(axis.text.y=element_blank(),
-          axis.ticks.y=element_blank(),
-          axis.title.y=element_blank(),
-          plot.margin=unit(c(0.5,0,0.5,0), "lines"),
-          axis.ticks.length.y = unit(0, "pt"))+
-    geom_text(data=panelLetter.normal,
-              aes(x=xpos,
-                  y=ypos,
-                  hjust=hjustvar,
-                  vjust=vjustvar,
-                  label="f",
-                  fontface="bold"))
-  
+  geom_ribbon(aes(ymin = lwr_ci_SnowDepth, ymax = upr_ci_SnowDepth), alpha = 0.2) +
+  geom_line() +
+  geom_point(data=YSLoff, aes(x=SnowDepth,
+                              y=IceOffJulian,
+                              fill=Year), 
+             shape=21, alpha=0.9)+
+  labs(x="Maximum snow depth (mm)",
+       y="Ice off")+
+  grafify::scale_fill_grafify(palette = "grey_conti", name = "Year")+ #yellow_conti scheme
+  scale_y_continuous(breaks=breaks_IceOff,labels=c("30-Apr","10-May","20-May","30-May","09-Jun"),limits=c(120,160))+
+  theme_pubr(border=TRUE, base_size=8)+
+  theme(axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        axis.title.y=element_blank(),
+        plot.margin=unit(c(0.5,0,0.5,0), "lines"),
+        axis.ticks.length.y = unit(0, "pt"))+
+  geom_text(data=panelLetter.normal,
+            aes(x=xpos,
+                y=ypos,
+                hjust=hjustvar,
+                vjust=vjustvar,
+                label="f",
+                fontface="bold"))
+
 
 #...Composite Ice Off Figure----------------------------------------
 
-
-
-IceOff<-(IceOff_SpringSnow+IceOff_SpringRain+IceOff_SnowDepth) + 
-    patchwork::plot_layout(ncol = 3, guides="collect") &
-    theme(legend.position="top")
-IceOff
-
-ggsave("Figures/GAMS_IceOff.png", plot=IceOff, width=8, height=4,units="in", dpi=300)
-
+# 
+# 
+# IceOff<-(IceOff_SpringSnow+IceOff_SpringRain+IceOff_SnowDepth) + 
+#   patchwork::plot_layout(ncol = 3, guides="collect") &
+#   theme(legend.position="top")
+# IceOff
+# 
+# ggsave("Figures/GAMS_IceOff.png", plot=IceOff, width=8, height=4,units="in", dpi=300)
+# 
 
 # ...Compile predictors of ice-off TS -------------------------------------
 
-
+# 
 GAMS_SpringSnow_new <-GAMS_SpringSnow +
   # theme(plot.margin=unit(c(0.5,0,0.5,0.5), "lines"),
   #       axis.text.y = element_text(angle = 90, hjust=0.5)) +
@@ -2977,7 +3036,9 @@ GAMS_SpringSnow_new <-GAMS_SpringSnow +
   theme(plot.margin=unit(c(0,0,0,0), "lines"),
         axis.text.x = element_blank(),
         axis.ticks.x = element_blank(),
-        axis.title.x = element_blank())
+        axis.title.x = element_blank(),
+        plot.title = element_text(hjust = 0.5))+
+  labs(title="Ice-off")
 
 
 GAMS_SpringRain_new <- GAMS_SpringRain +
@@ -3012,28 +3073,38 @@ GAMS_SnowDepth_new <- GAMS_SnowDepth +
                 label="f",
                 fontface="bold"))+
   theme(plot.margin=unit(c(0,0,0,0), "lines"))
-
-#...Ice Off  predictor trends----------------------------------------
-
-IceOff_preds <- (GAMS_SpringSnow_new+GAMS_SpringRain_new+GAMS_SnowDepth_new+patchwork::plot_spacer()) +  patchwork::plot_layout(ncol = 4)
-IceOff_preds
-
-
-ggsave("Figures/GAMS_IceOff_Predictors.png", plot=IceOff_preds, width=8, height=3,units="in", dpi=300)
-
+# 
+# #...Ice Off  predictor trends----------------------------------------
+# 
+# IceOff_preds <- (GAMS_SpringSnow_new+GAMS_SpringRain_new+GAMS_SnowDepth_new+patchwork::plot_spacer()) +  patchwork::plot_layout(ncol = 4)
+# IceOff_preds
+# 
+# 
+# ggsave("Figures/GAMS_IceOff_Predictors.png", plot=IceOff_preds, width=8, height=3,units="in", dpi=300)
+# 
 
 # MODELS - ICE DURATION ---------------------------------------------------
 
-YSLoff2 <- YSLoff %>%
-  mutate(IceDuration = IceOnJulian-IceOffJulian)
+# YSLoff2 <- YSLoff %>%
+#   mutate(IceDuration = IceOnJulian-IceOffJulian)
+# 
+# 
+# ### I added Family Gamma here since observatiOffs are always > 0
+# mod0_iceDuration <- gam(IceDuration ~ s(Year),
+#                         family=Gamma(link="log"),
+#                         data = YSLoff2,
+#                         # correlatiOff = corCAR1(form = ~ Year),
+#                         method = "REML")
+# summary(mod0_iceDuration)
+# draw(mod0_iceDuration)
+# appraise(mod0_iceDuration)
 
 
-### I added Family Gamma here since observatiOffs are always > 0
-mod0_iceDuration <- gam(IceDuration ~ s(Year),
-                   family=Gamma(link="log"),
-                   data = YSLoff2,
-                   # correlatiOff = corCAR1(form = ~ Year),
-                   method = "REML")
+mod0_iceDuration <- gam(ice_days ~ s(start_year),
+                        family=Gamma(link="log"),
+                        data = ysl_ice,
+                        # correlatiOff = corCAR1(form = ~ Year),
+                        method = "REML")
 summary(mod0_iceDuration)
 draw(mod0_iceDuration)
 appraise(mod0_iceDuration)
@@ -3046,94 +3117,129 @@ ggplot(ACF, aes(x = Lag, y = ACF)) +
   geom_segment(mapping = aes(xend = Lag, yend = 0))
 #Suggests that an AR(1) model isn't necessary
 
-min(YSLoff2$IceDuration, na.rm=TRUE)
-max(YSLoff2$IceDuration, na.rm=TRUE)
-mean(YSLoff2$IceDuration, na.rm=TRUE)
+min(ysl_ice$ice_days, na.rm=TRUE)
+max(ysl_ice$ice_days, na.rm=TRUE)
+mean(ysl_ice$ice_days, na.rm=TRUE)
 
 # FIGURE 2  - TS Ice On, Off, Duration ----------------------------------------------------------------
 
-#How many complete ice-on observations?
-length((YSLon %>%
-  drop_na(IceOnJulian) %>%
-  pull(IceOnJulian)))
-#How many complete ice-off obsersvations?
-length((YSLoff %>%
-          drop_na(IceOffJulian) %>%
-          pull(IceOffJulian)))
 
+hi_res <- full_data %>% 
+  select(lake, start_year, ice_days, j_on_wy, j_off_wy) %>%
+  pivot_longer(ice_days:j_off_wy) %>%
+  mutate(name = factor(name,
+                       levels=c("j_on_wy",
+                                "j_off_wy",
+                                "ice_days"),
+                       labels=c("Ice on (days since Oct 1)",
+                                "Ice off (days since Oct 1)",
+                                "Ice duration (days)"))) %>%
+  ggplot(aes(x = start_year,
+             y = value)) +
+  geom_point(shape=21, fill="grey50", size=3, alpha=0.9) +
+  theme_bw() +
+  facet_grid(name ~ lake, scales = "free_y", switch="y") +
+  geom_smooth(method = "gam", color="black", formula = y ~s(x, k=3)) + 
+  scale_x_continuous(breaks=c(1930,1960,1990,2020),
+                     limits=c(1930,2020))+
+  labs(x="Year")+
+  theme_pubr(border=TRUE, base_size=16)+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        strip.placement.y = "outside",
+        strip.background.y = element_blank(),
+        axis.title.y = element_blank(),
+        strip.text = element_text(face = "bold"))
+hi_res
 
-IceOnTS <-
-  ggplot() + 
-  geom_point(data=YSLon, aes(x=Year,
-                             y=IceOnJulian), 
-             shape=21, fill="grey50", alpha=0.9)+
-  labs(x="Year",
-       y="Ice-on date")+
-  scale_y_continuous(breaks=breaks_IceOn,labels=c("06-Dec","16-Dec","26-Dec","06-Jan","16-Jan","26-Jan"))+
-  coord_cartesian(xlim=c(1925,2025))+
-  scale_x_continuous(breaks=seq(1930, 2020, 15))+
-  theme_pubr(border=TRUE, base_size=8)+
-  theme(plot.margin=unit(c(0.5,0.5,0,0.5), "lines"),
-        axis.text.x=element_blank(),
-        axis.ticks.x=element_blank(),
-        axis.title.x=element_blank())+
-        # axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2)) +
-  geom_text(data=panelLetter.normal,
-            aes(x=xpos,
-                y=ypos,
-                hjust=hjustvar,
-                vjust=vjustvar,
-                label="a",
-                fontface="bold"))
+ggsave(filename = here::here("Figures/Figure2_full_fig_hi-res.pdf"),
+       plot = hi_res,
+       dpi = 600)
+ggsave(filename = here::here("Figures/Figure2_full_fig_hi-res.png"),
+       plot = hi_res,
+       dpi = 600)
 
-IceOffTS <-
-ggplot() + 
-  geom_point(data=YSLoff, aes(x=Year,
-                             y=IceOffJulian), 
-             shape=21, fill="grey50", alpha=0.9)+
-  labs(x="Year",
-       y="Ice-off date")+
-  scale_y_continuous(breaks=breaks_IceOff,labels=c("30-Apr","10-May","20-May","30-May","09-Jun"),limits=c(120,160))+
-  coord_cartesian(xlim=c(1925,2025))+
-  scale_x_continuous(breaks=seq(1930, 2020, 15))+
-  theme_pubr(border=TRUE, base_size=8)+
-  theme(plot.margin=unit(c(0,0.5,0,0.5), "lines"),
-        axis.text.x=element_blank(),
-        axis.ticks.x=element_blank(),
-        axis.title.x=element_blank())+
-  # axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2)) +
-  geom_text(data=panelLetter.normal,
-            aes(x=xpos,
-                y=ypos,
-                hjust=hjustvar,
-                vjust=vjustvar,
-                label="b",
-                fontface="bold"))
-
-IceDuration <-
-  ggplot() + 
-  geom_point(data=YSLoff, aes(x=Year,
-                              y=IceOnJulian-IceOffJulian), 
-             shape=21, fill="grey50", alpha=0.9)+
-  labs(x="Year",
-       y="Ice duration (days)")+
-  # scale_y_continuous(breaks=breaks_IceOff,labels=c("30-Apr","10-May","20-May","30-May","09-Jun"),limits=c(120,160))+
-  # coord_cartesian(xlim=c(1925,2025))+
-  scale_x_continuous(breaks=seq(1930, 2020, 15))+
-  theme_pubr(border=TRUE, base_size=8)+
-  theme(plot.margin=unit(c(0,0.5,0.5,0.5), "lines"))+
-  # axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2)) +
-  geom_text(data=panelLetter.normal,
-            aes(x=xpos,
-                y=ypos,
-                hjust=hjustvar,
-                vjust=vjustvar,
-                label="c",
-                fontface="bold"))
-
-
-(IceOnTS / IceOffTS / IceDuration) & scale_x_continuous(breaks=c(1930,1960,1990,2020))
-ggsave("Figures/Figure2_IcePhenology.png", width=3, height=6,units="in", dpi=300)
+# #How many complete ice-on observations?
+# length((YSLon %>%
+#           drop_na(IceOnJulian) %>%
+#           pull(IceOnJulian)))
+# #How many complete ice-off obsersvations?
+# length((YSLoff %>%
+#           drop_na(IceOffJulian) %>%
+#           pull(IceOffJulian)))
+# 
+# 
+# IceOnTS <-
+#   ggplot() + 
+#   geom_point(data=YSLon, aes(x=Year,
+#                              y=IceOnJulian), 
+#              shape=21, fill="grey50", alpha=0.9)+
+#   labs(x="Year",
+#        y="Ice-on date")+
+#   # scale_y_continuous(breaks=breaks_IceOn,labels=c("06-Dec","16-Dec","26-Dec","06-Jan","16-Jan","26-Jan"))+
+#   coord_cartesian(xlim=c(1925,2025))+
+#   scale_x_continuous(breaks=seq(1930, 2020, 15))+
+#   theme_pubr(border=TRUE, base_size=8)+
+#   theme(plot.margin=unit(c(0.5,0.5,0,0.5), "lines"),
+#         axis.text.x=element_blank(),
+#         axis.ticks.x=element_blank(),
+#         axis.title.x=element_blank())+
+#   # axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2)) +
+#   geom_text(data=panelLetter.normal,
+#             aes(x=xpos,
+#                 y=ypos,
+#                 hjust=hjustvar,
+#                 vjust=vjustvar,
+#                 label="a",
+#                 fontface="bold"))
+#   
+# IceOffTS <-
+#   ggplot() + 
+#   geom_point(data=YSLoff, aes(x=Year,
+#                               y=IceOffJulian), 
+#              shape=21, fill="grey50", alpha=0.9)+
+#   labs(x="Year",
+#        y="Ice-off date")+
+#   scale_y_continuous(breaks=breaks_IceOff,labels=c("30-Apr","10-May","20-May","30-May","09-Jun"),limits=c(120,160))+
+#   coord_cartesian(xlim=c(1925,2025))+
+#   scale_x_continuous(breaks=seq(1930, 2020, 15))+
+#   theme_pubr(border=TRUE, base_size=8)+
+#   theme(plot.margin=unit(c(0,0.5,0,0.5), "lines"),
+#         axis.text.x=element_blank(),
+#         axis.ticks.x=element_blank(),
+#         axis.title.x=element_blank())+
+#   # axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2)) +
+#   geom_text(data=panelLetter.normal,
+#             aes(x=xpos,
+#                 y=ypos,
+#                 hjust=hjustvar,
+#                 vjust=vjustvar,
+#                 label="b",
+#                 fontface="bold"))
+# 
+# IceDuration <-
+#   ggplot() + 
+#   geom_point(data=YSLoff, aes(x=Year,
+#                               y=IceOnJulian-IceOffJulian), 
+#              shape=21, fill="grey50", alpha=0.9)+
+#   labs(x="Year",
+#        y="Ice duration (days)")+
+#   # scale_y_continuous(breaks=breaks_IceOff,labels=c("30-Apr","10-May","20-May","30-May","09-Jun"),limits=c(120,160))+
+#   # coord_cartesian(xlim=c(1925,2025))+
+#   scale_x_continuous(breaks=seq(1930, 2020, 15))+
+#   theme_pubr(border=TRUE, base_size=8)+
+#   theme(plot.margin=unit(c(0,0.5,0.5,0.5), "lines"))+
+#   # axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2)) +
+#   geom_text(data=panelLetter.normal,
+#             aes(x=xpos,
+#                 y=ypos,
+#                 hjust=hjustvar,
+#                 vjust=vjustvar,
+#                 label="c",
+#                 fontface="bold"))
+# 
+# 
+# (IceOnTS / IceOffTS / IceDuration) & scale_x_continuous(breaks=c(1930,1960,1990,2020))
+# ggsave("Figures/Figure2_IcePhenology.png", width=3, height=6,units="in", dpi=300)
 
 
 
@@ -3172,11 +3278,11 @@ IceOff_SnowDepth_vert <- IceOff_SnowDepth +
         axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2))
 
 combined <- (IceOn_FallMin_vert+ #a
-  IceOff_SpringSnow_vert+ #d
-  IceOn_FallSnow_vert+ #b
-  IceOff_SpringRain_vert+ #e
-    IceOn_FallTempSum_vert+ #c
-    IceOff_SnowDepth_vert) & #f
+               IceOff_SpringSnow_vert+ #d
+               IceOn_FallSnow_vert+ #b
+               IceOff_SpringRain_vert+ #e
+               IceOn_FallTempSum_vert+ #c
+               IceOff_SnowDepth_vert) & #f
   scale_fill_gradient( low = "white", high = "black",
                        guide = guide_colorbar(label = TRUE,
                                               draw.ulim = TRUE, 
@@ -3189,34 +3295,40 @@ combined <- (IceOn_FallMin_vert+ #a
                                               barheight = 1.3, 
                                               direction = 'horizontal')) &
   theme(legend.position="bottom",
-        plot.title = element_text(hjust = 0.5))
-  
+        plot.title = element_text(hjust = 0.5),
+        legend.text = element_text(size=8))
+
 combined <- combined  +
   patchwork::plot_layout(ncol = 2, guides="collect")
 
-
-# combined <- patchwork::wrap_elements(panel = combined) +
-  # labs(tag = "Ice on or off date") +
-  # theme(
-  #   plot.tag = element_text(size = rel(1), angle = 90),
-  #   plot.tag.position = "left"
-  # )
 combined
+ggsave("Figures/Figure3_GAMS_IceOn_IceOff.pdf", width=5, height=7,units="in", dpi=600)
 ggsave("Figures/Figure3_GAMS_IceOn_IceOff.png", width=5, height=7,units="in", dpi=600)
+
 
 # FIGURE 4  - predictors - ice on and off ----------------------------------------------------------------
 IceOff_nolegend <- IceOff &
   theme(legend.position="none")
 
 #Row 1
-Row1 <- ( (GAMS_FallMin_new+GAMS_FallSnow_new+GAMS_FallTempSum_new)+
-  patchwork::plot_layout(ncol = 1) & scale_x_continuous(breaks=c(1930,1960,1990,2020)) )
+Row1 <- (
+  (GAMS_FallMin_new + GAMS_FallSnow_new + GAMS_FallTempSum_new) +
+    patchwork::plot_layout(ncol = 1) &
+    scale_x_continuous(breaks = c(1930, 1960, 1990, 2020))
+) +
+  labs(x = "Year")
 
 #Row 2
-Row2 <- ( (GAMS_SpringSnow_new+GAMS_SpringRain_new+GAMS_SnowDepth_new) +  patchwork::plot_layout(ncol = 1) & scale_x_continuous(breaks=c(1930,1960,1990,2020)) )
+Row2 <-
+  (
+    (GAMS_SpringSnow_new + GAMS_SpringRain_new + GAMS_SnowDepth_new) +  patchwork::plot_layout(ncol = 1) &
+      scale_x_continuous(breaks = c(1930, 1960, 1990, 2020))
+  )+
+  labs(x="Year")
 
 cowplot::plot_grid(Row1, Row2)
 
+ggsave("Figures/Figure4_GAMS_IceOn_IceOff_Predictors.pdf", width=5, height=7,units="in", dpi=600)
 ggsave("Figures/Figure4_GAMS_IceOn_IceOff_Predictors.png", width=5, height=7,units="in", dpi=600)
 
 
@@ -3289,10 +3401,10 @@ mod_iceOn_df <- bind_rows(mod1_iceOn_df,
             digits = 3)
 
 mod_iceOff_df <- bind_rows(mod1_iceOff_df,
-                          mod2_iceOff_df,
-                          mod3_iceOff_df,
-                          mod4_iceOff_df,
-                          mod5_iceOff_df) %>%
+                           mod2_iceOff_df,
+                           mod3_iceOff_df,
+                           mod4_iceOff_df,
+                           mod5_iceOff_df) %>%
   arrange(AIC) %>%
   mutate_if(is.numeric,
             round,
@@ -3311,3 +3423,4 @@ all_mods_hux <-
 
 theme_plain(all_mods_hux)
 quick_docx(all_mods_hux)
+
