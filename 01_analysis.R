@@ -13,6 +13,8 @@ library(lme4)
 library(lmerTest)
 library(ggeffects)
 library(officer)
+library(dataRetrieval)
+library(lemon)
 
 #Look into QDO, PDO, ENSO
 source("0_functions.R")
@@ -144,19 +146,56 @@ ysl_ice <- YSLon %>%
                                      TRUE ~ IceOnJulian)) %>%
   mutate(IceOn = ymd(parse_date_time(paste(Year, IceOnJulian_new), orders = "yj")),
          IceOff = ymd(parse_date_time(paste(Year, IceOffJulian), orders = "yj")),
-         
          j_on_wy = hydro.day(IceOn),
          j_off_wy = hydro.day(IceOff),
          ice_days = j_off_wy - j_on_wy,
          start_year = Year,
+         water_year = calcWaterYear(IceOn),
          lake = "yellowstone") %>% 
-  select(-c(IceOnDate:IceOnJulian_new))
+  select(-c(IceOnDate:IceOnJulian_new)) 
   
-str(ysl_ice)
+
+#IAO WORK HERE!! 
+ysl_iceon <- YSLon %>%
+  select(Year, IceOnDate, IceOnJulian) %>%
+  drop_na(IceOnJulian) %>%
+  mutate(IceOnJulian_new = case_when(IceOnJulian > 365 ~ IceOnJulian - 365,
+                                     TRUE ~ IceOnJulian)) %>%
+  mutate(iceOn = ymd(parse_date_time(paste(Year, IceOnJulian_new), orders = "yj")),
+         j_on_wy = hydro.day(iceOn),
+         water_year = calcWaterYear(iceOn),
+         lake = "yellowstone") %>% 
+  select(lake, water_year, iceOn) %>%
+  pivot_longer(iceOn) %>%
+  group_by(water_year) %>%
+  slice(which.max(value)) #use the 2nd date if there are duplicates
+  # drop_na(water_year)
+
+
+ysl_iceoff <- YSLoff %>%
+  select(Year, IceOffDate, IceOffJulian) %>%
+  drop_na(IceOffJulian) %>%
+  mutate(iceOff = ymd(parse_date_time(paste(Year, IceOffJulian), orders = "yj")),
+         j_off_wy = hydro.day(iceOff),
+         water_year = calcWaterYear(iceOff),
+         lake = "yellowstone") %>% 
+  select(lake, water_year, iceOff) %>%
+  pivot_longer(iceOff)
+
+ysl_bind <- bind_rows(ysl_iceon, ysl_iceoff) %>%
+  pivot_wider(values_from = value, names_from = name) %>%
+  mutate(j_on_wy = hydro.day(iceOn),
+         j_off_wy = hydro.day(iceOff),
+         ice_days = j_off_wy - j_on_wy,
+         # duration_d = difftime(IceOn,IceOff,units="days"),
+         start_year = year(iceOn))
+
+str(ysl_bind)
 str(non_ysl)
 
 # combine data sets
-full_data <- bind_rows(non_ysl, ysl_ice)
+full_data <- bind_rows(non_ysl, ysl_bind) %>%
+  arrange(lake, start_year)
   # mutate(start_y_c = start_year - mean(start_year, na.rm = TRUE))
 
 
@@ -2410,6 +2449,7 @@ appraise(mod4_iceOn)
 compareML(mod3_iceOn, mod4_iceOn) #Very similar, mod4 might slightly better than 3
 #but deviance explained much higher in model 3
 
+hist(mod3_iceOn$residuals)
 
 
 # Ice On Figure -----------------------------------------------------------
@@ -3150,6 +3190,14 @@ hi_res <- full_data %>%
         axis.title.y = element_blank(),
         strip.text = element_text(face = "bold"))
 hi_res
+
+#wy_day 150 = Feb 28
+#wy_day 100 = Jan 10
+#wy_day 50 = Nov 20
+#wy_day 240 = May 29
+#wy_day 220 = May 9
+#wy_day 200 = Apr 19
+
 
 ggsave(filename = here::here("Figures/Figure2_full_fig_hi-res.pdf"),
        plot = hi_res,
