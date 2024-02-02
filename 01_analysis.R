@@ -155,7 +155,8 @@ ysl_ice <- YSLon %>%
   select(-c(IceOnDate:IceOnJulian_new)) 
   
 
-#IAO WORK HERE!! 
+#Create separate ice on and ice off phenology just to double check 
+#that everything aligns correctly for the ice duration calculation
 ysl_iceon <- YSLon %>%
   select(Year, IceOnDate, IceOnJulian) %>%
   drop_na(IceOnJulian) %>%
@@ -197,6 +198,71 @@ str(non_ysl)
 full_data <- bind_rows(non_ysl, ysl_bind) %>%
   arrange(lake, start_year)
   # mutate(start_y_c = start_year - mean(start_year, na.rm = TRUE))
+
+
+## Add Weather to Ice Duration dataframe
+ice_dur <- ysl_bind %>%
+  select(start_year, water_year, ice_days) %>%
+  drop_na(ice_days)
+
+# Spring<-Weather[Weather$Month=="Mar"|Weather$Month=="Apr"|Weather$Month=="May",]
+# Summer<-Weather[Weather$Month=="Jun"|Weather$Month=="Jul"|Weather$Month=="Aug",]
+# Fall<-Weather[Weather$Month=="Sep"|Weather$Month=="Oct"|Weather$Month=="Nov",]
+# Winter<-Weather[Weather$Month=="Dec"|Weather$Month=="Jan"|Weather$Month=="Feb",]
+
+#Starting with the 'MohonkDailyWeatherFull' dataframe which has daily min, mean, max temps and precip as snow or rain, I created a dataframe with monthly to seasonal cumulative metrics.
+ysl_wx_annual <- Weather %>%
+  mutate(
+    Date = mdy(Date),
+    year = year(Date),
+    month = month(Date),
+    month_name = month(Date, label = TRUE),
+    water_year = dataRetrieval::calcWaterYear(Date)) %>% 
+  group_by(water_year) %>%
+  summarize(AnnualMax=max(max.C,na.rm=T),
+            AnnualMin=min(min.C,na.rm=T),
+            AnnualRain=sum(rain.mm,na.rm=T),
+            AnnualSnow=sum(snow.mm,na.rm=T),
+            SnowDepth=max(SnowDepth.mm,na.rm=T))
+
+
+ysl_wx_phenol <- Weather %>%
+  mutate(
+    Date = mdy(Date),
+    year = year(Date),
+    month = month(Date),
+    month_name = month(Date, label = TRUE),
+    water_year = dataRetrieval::calcWaterYear(Date),
+    water_year_corrected = case_when(month == '9' ~ water_year + 1,
+                                          TRUE ~ water_year),
+    #This is a little janky but we want to pretend that Sept is part of the same
+    #water year as the next month (Oct) for the purposes of summarizing the data below
+    season = case_when(Month %in% c("Mar","Apr","May") ~ "Spring",
+                       Month %in% c("Jun","Jul","Aug") ~ "Summer",
+                       Month %in% c("Sep","Oct","Nov") ~ "Fall",
+                       Month %in% c("Dec","Jan","Feb") ~ "Winter")) %>% 
+  group_by(water_year_corrected, season) %>%
+  
+  dplyr::summarize( #I don't think it makes sense to remove NAs for sum? 
+    Max = max(max.C, na.rm = T),
+    Min = min(min.C, na.rm = T),
+    Rain = sum(rain.mm, na.rm = T),
+    Snow = sum(snow.mm, na.rm = T),
+    TempSum = sum(mean.C, na.rm = T),
+    SnowDepth = max(SnowDepth.mm, na.rm = T)
+  ) %>%
+  #Convert dataframe from long to wide format
+  pivot_wider(
+    names_from = "season",
+    names_sep = "",
+    values_from = c(Max:SnowDepth)
+  ) %>%
+  dplyr::rename(water_year=water_year_corrected) %>% 
+  left_join(., ysl_wx_annual, by = "water_year") %>%
+  left_join(., ice_dur) %>%
+  drop_na(ice_days)
+
+
 
 
 # GAMs all lakes ----------------------------------------------------------
@@ -2888,8 +2954,8 @@ new_data <-
          SpringMax = median(SpringMax, na.rm=TRUE)
        ))
 
-ilink <- family(mod3_iceOff)$linkinv
-pred_SpringSnow <- predict(mod3_iceOff, new_data, type = "link", se.fit = TRUE)
+ilink <- family(mod5_iceOff)$linkinv
+pred_SpringSnow <- predict(mod5_iceOff, new_data, type = "link", se.fit = TRUE)
 pred_SpringSnow <- cbind(pred_SpringSnow, new_data)
 pred_SpringSnow <- transform(pred_SpringSnow, lwr_ci = ilink(fit - (2 * se.fit)),
                              upr_ci = ilink(fit + (2 * se.fit)),
@@ -2950,8 +3016,8 @@ new_data <-
        ))
 
 
-ilink <- family(mod3_iceOff)$linkinv
-pred_SpringRain <- predict(mod3_iceOff, new_data, type = "link", se.fit = TRUE)
+ilink <- family(mod5_iceOff)$linkinv
+pred_SpringRain <- predict(mod5_iceOff, new_data, type = "link", se.fit = TRUE)
 pred_SpringRain <- cbind(pred_SpringRain, new_data)
 pred_SpringRain <- transform(pred_SpringRain, lwr_ci = ilink(fit - (2 * se.fit)),
                              upr_ci = ilink(fit + (2 * se.fit)),
@@ -3008,8 +3074,8 @@ new_data <-
          SpringMax = median(SpringMax, na.rm=TRUE)
        ))
 
-ilink <- family(mod3_iceOff)$linkinv
-pred_SnowDepth <- predict(mod3_iceOff, new_data, type = "link", se.fit = TRUE)
+ilink <- family(mod5_iceOff)$linkinv
+pred_SnowDepth <- predict(mod5_iceOff, new_data, type = "link", se.fit = TRUE)
 pred_SnowDepth <- cbind(pred_SnowDepth, new_data)
 pred_SnowDepth <- transform(pred_SnowDepth, lwr_ci = ilink(fit - (2 * se.fit)),
                             upr_ci = ilink(fit + (2 * se.fit)),
@@ -3125,21 +3191,6 @@ GAMS_SnowDepth_new <- GAMS_SnowDepth +
 
 # MODELS - ICE DURATION ---------------------------------------------------
 
-# YSLoff2 <- YSLoff %>%
-#   mutate(IceDuration = IceOnJulian-IceOffJulian)
-# 
-# 
-# ### I added Family Gamma here since observatiOffs are always > 0
-# mod0_iceDuration <- gam(IceDuration ~ s(Year),
-#                         family=Gamma(link="log"),
-#                         data = YSLoff2,
-#                         # correlatiOff = corCAR1(form = ~ Year),
-#                         method = "REML")
-# summary(mod0_iceDuration)
-# draw(mod0_iceDuration)
-# appraise(mod0_iceDuration)
-
-
 mod0_iceDuration <- gam(ice_days ~ s(start_year),
                         family=Gamma(link="log"),
                         data = ysl_ice,
@@ -3157,9 +3208,213 @@ ggplot(ACF, aes(x = Lag, y = ACF)) +
   geom_segment(mapping = aes(xend = Lag, yend = 0))
 #Suggests that an AR(1) model isn't necessary
 
-min(ysl_ice$ice_days, na.rm=TRUE)
+min(YSLoff$ice_days, na.rm=TRUE)
 max(ysl_ice$ice_days, na.rm=TRUE)
 mean(ysl_ice$ice_days, na.rm=TRUE)
+
+## I swear to god we better get the same answer here
+
+mod0.5_iceDuration <- gam(ice_days ~ s(start_year),
+                        family=Gamma(link="log"),
+                        data = ysl_wx_phenol,
+                        # correlatiOff = corCAR1(form = ~ Year),
+                        method = "REML")
+summary(mod0.5_iceDuration)
+draw(mod0.5_iceDuration)
+appraise(mod0.5_iceDuration)
+
+min(ysl_wx_phenol$ice_days, na.rm=TRUE)
+max(ysl_wx_phenol$ice_days, na.rm=TRUE)
+mean(ysl_wx_phenol$ice_days, na.rm=TRUE)
+
+## Look at correlations between ice_days and everything else
+na_strings <- c(-Inf,Inf)
+ysl_wx_phenol <- ysl_wx_phenol %>% naniar::replace_with_na_all(condition = ~.x %in% na_strings)
+
+corr <- Hmisc::rcorr(as.matrix(ysl_wx_phenol[,2:ncol(ysl_wx_phenol)]))
+corr
+
+# ++++++++++++++++++++++++++++
+# flattenCorrMatrix
+# ++++++++++++++++++++++++++++
+#Function from: http://www.sthda.com/english/wiki/correlation-matrix-a-quick-start-guide-to-analyze-format-and-visualize-a-correlation-matrix-using-r-software
+# cormat : matrix of the correlation coefficients
+# pmat : matrix of the correlation p-values
+flattenCorrMatrix <- function(cormat, pmat) {
+  ut <- upper.tri(cormat)
+  data.frame(
+    row = rownames(cormat)[row(cormat)[ut]],
+    column = rownames(cormat)[col(cormat)[ut]],
+    cor  = (cormat)[ut],
+    p = pmat[ut]
+  )
+}
+
+#Create dataframe of pearson r and p-values
+ysl_ice_days_correlations<-flattenCorrMatrix(corr$r, corr$P)
+
+#In an effort to limit the number of covariates, here I am looking at all correlations > 0.7
+#and then below making a choice on which of the pair I should keep.
+ysl_ice_days_correlations_trim <- ysl_ice_days_correlations %>%
+  filter(column=="ice_days") %>%
+  filter(p < 0.05) %>%
+  arrange(desc(cor)) 
+
+head(ysl_ice_days_correlations_trim)
+
+## Full model
+mod1_iceDur <- gam(ice_days ~ s(SnowDepth)+ s(MinWinter) + s(RainSpring)+ s(TempSumSpring),
+                   family=Gamma(link="log"),
+                   data = ysl_wx_phenol,
+                   # correlatiOff = corCAR1(form = ~ Year),
+                   method = "REML")
+summary(mod1_iceDur)
+draw(mod1_iceDur)
+appraise(mod1_iceDur)
+
+## Reduce
+mod2_iceDur <- gam(ice_days ~ s(SnowDepth)+ s(RainSpring)+ s(TempSumSpring),
+                   family=Gamma(link="log"),
+                   data = ysl_wx_phenol,
+                   # correlatiOff = corCAR1(form = ~ Year),
+                   method = "REML")
+summary(mod2_iceDur)
+draw(mod2_iceDur)
+appraise(mod2_iceDur)
+
+## Reduce
+mod3_iceDur <- gam(ice_days ~ s(SnowDepth)+  s(TempSumSpring),
+                   family=Gamma(link="log"),
+                   data = ysl_wx_phenol,
+                   # correlation = corCAR1(form = ~ Year),
+                   method = "REML")
+summary(mod3_iceDur)
+draw(mod3_iceDur)
+appraise(mod3_iceDur)
+
+compareML(mod2_iceDur, mod3_iceDur) #model3 wins
+
+
+# Ice duration figure ----- -----------------------------------------------
+
+#annotate panel letters inside plot
+panelLetter.normal <- data.frame(
+  xpos = c(-Inf),
+  ypos =  c(Inf),
+  hjustvar = c(-0.5) ,
+  vjustvar = c(1.5))
+
+
+# ... Panel A -- Ice Duration vs. Max snow depth -------------------------------------
+
+new_data <-
+  with(ysl_wx_phenol,
+       expand.grid(
+         SnowDepth = seq(
+           min(SnowDepth, na.rm = TRUE),
+           max(SnowDepth, na.rm =
+                 TRUE),
+           length = 200
+         ),
+         TempSumSpring = median(TempSumSpring, na.rm =
+                             TRUE)
+       ))
+
+ilink <- family(mod3_iceDur)$linkinv
+pred_SnowDepth <- predict(mod3_iceDur, new_data, type = "link", se.fit = TRUE)
+pred_SnowDepth <- cbind(pred_SnowDepth, new_data)
+pred_SnowDepth <- transform(pred_SnowDepth, lwr_ci = ilink(fit - (2 * se.fit)),
+                          upr_ci = ilink(fit + (2 * se.fit)),
+                          fitted = ilink(fit))
+
+pred_SnowDepth <- pred_SnowDepth %>%
+  select(SnowDepth, lwr_ci:fitted) %>%
+  dplyr::rename(lwr_ci_SnowDepth = lwr_ci,
+                upr_ci_SnowDepth = upr_ci,
+                fitted_SnowDepth = fitted)
+
+IceDuration_SnowDepth<-
+  ggplot(pred_SnowDepth, aes(x = SnowDepth, y = fitted_SnowDepth)) +
+  geom_ribbon(aes(ymin = lwr_ci_SnowDepth, ymax = upr_ci_SnowDepth), alpha = 0.2) +
+  geom_line() +
+  geom_point(data=ysl_wx_phenol %>%
+               dplyr::rename(Year=water_year), aes(x=SnowDepth,
+                             y=ice_days,
+                             fill=Year), 
+             shape=21, alpha=0.9)+
+  labs(x="Maximum snow depth (mm)",
+       y="Ice duration (days)")+
+  grafify::scale_fill_grafify(palette = "grey_conti", name = "Year")+ #yellow_conti scheme
+  theme_pubr(border=TRUE, base_size=8)+
+  theme(plot.margin=unit(c(0.5,0,0.5,0.5), "lines"),
+        axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2)) +
+  geom_text(data=panelLetter.normal,
+            aes(x=xpos,
+                y=ypos,
+                hjust=hjustvar,
+                vjust=vjustvar,
+                label="g",
+                fontface="bold"))
+
+
+# ... Panel B -- Ice Duration vs. Spring Temp -------------------------------------
+
+new_data <-
+  with(ysl_wx_phenol,
+       expand.grid(
+         TempSumSpring = seq(
+           min(TempSumSpring, na.rm = TRUE),
+           max(TempSumSpring, na.rm =
+                 TRUE),
+           length = 200
+         ),
+         SnowDepth = median(SnowDepth, na.rm =
+                            TRUE)
+       ))
+
+ilink <- family(mod3_iceDur)$linkinv
+pred_SpringTemp <- predict(mod3_iceDur, new_data, type = "link", se.fit = TRUE)
+pred_SpringTemp <- cbind(pred_SpringTemp, new_data)
+pred_SpringTemp <- transform(pred_SpringTemp, lwr_ci = ilink(fit - (2 * se.fit)),
+                           upr_ci = ilink(fit + (2 * se.fit)),
+                           fitted = ilink(fit))
+pred_SpringTemp <- pred_SpringTemp %>%
+  select(TempSumSpring, lwr_ci:fitted) %>%
+  dplyr::rename(lwr_ci_SpringTemp = lwr_ci,
+                upr_ci_SpringTemp = upr_ci,
+                fitted_SpringTemp = fitted)
+
+
+IceDuration_SpringTemp<-
+  ggplot(pred_SpringTemp, aes(x = TempSumSpring, y = fitted_SpringTemp)) +
+  geom_ribbon(aes(ymin = lwr_ci_SpringTemp, ymax = upr_ci_SpringTemp), alpha = 0.2) +
+  geom_line() +
+  geom_point(data=ysl_wx_phenol %>%
+               dplyr::rename(Year=water_year), aes(x=TempSumSpring,
+                             y=ice_days,
+                             fill=Year), 
+             shape=21,alpha=0.9)+
+  labs(x="Cumulative spring temperature (°C)",
+       y="Ice duration (days)")+
+  grafify::scale_fill_grafify(palette = "grey_conti", name = "Year")+ #yellow_conti scheme
+  theme_pubr(border=TRUE, base_size=8)+
+  theme(
+    axis.text.y=element_blank(),
+    axis.ticks.y=element_blank(),
+    axis.title.y=element_blank(),
+    plot.margin=unit(c(0.5,0,0.5,0), "lines"),
+    axis.ticks.length.y = unit(0, "pt"))+
+  geom_text(data=panelLetter.normal,
+            aes(x=xpos,
+                y=ypos,
+                hjust=hjustvar,
+                vjust=vjustvar,
+                label="h",
+                fontface="bold"))
+
+
+#Plot them together
+IceDuration_SnowDepth + IceDuration_SpringTemp 
 
 # FIGURE 2  - TS Ice On, Off, Duration ----------------------------------------------------------------
 
@@ -3352,6 +3607,54 @@ combined <- combined  +
 combined
 ggsave("Figures/Figure3_GAMS_IceOn_IceOff.pdf", width=5, height=7,units="in", dpi=600)
 ggsave("Figures/Figure3_GAMS_IceOn_IceOff.png", width=5, height=7,units="in", dpi=600)
+
+
+
+#Same as above BUT with ice duration too
+ 
+IceDuration_SnowDepth_vert <- IceDuration_SnowDepth +
+  theme(plot.margin=unit(c(0,0.1,0.3,0.5), "lines"),
+        axis.title.y=element_blank(),
+        axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2),
+        legend.position="none")+
+  labs(title="Ice duration")
+IceDuration_SpringTemp_vert <- IceDuration_SpringTemp +
+  theme(plot.margin=unit(c(0,0.1,0.3,0.5), "lines"),
+        axis.ticks.y=element_line(),
+        axis.ticks.length.y = unit(0.1, "cm"),
+        axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2),
+        legend.position="none")
+
+combined <- (IceOn_FallMin_vert+ #a
+               IceOff_SpringSnow_vert+ #d
+               IceDuration_SnowDepth_vert+ #g
+               IceOn_FallSnow_vert+ #b
+               IceOff_SpringRain_vert+ #e
+               IceDuration_SpringTemp_vert + #h
+               IceOn_FallTempSum_vert+ #c
+               IceOff_SnowDepth_vert+ #f
+               patchwork::guide_area()) & 
+  scale_fill_gradient( low = "white", high = "black",
+                       guide = guide_colorbar(label = TRUE,
+                                              draw.ulim = TRUE, 
+                                              draw.llim = TRUE,
+                                              frame.colour = "black",
+                                              ticks = TRUE, 
+                                              nbin = 10,
+                                              # label.position = "bottom",
+                                              barwidth = 2,
+                                              barheight = 8, 
+                                              direction = 'vertical')) &
+  theme(legend.position="bottom",
+        plot.title = element_text(hjust = 0.5),
+        legend.text = element_text(size=8))
+
+combined <- combined  +
+  patchwork::plot_layout(ncol = 3, guides="collect")
+
+combined
+ggsave("Figures/Figure3_GAMS_IceOn_IceOff_IceDuration.pdf", width=7, height=7,units="in", dpi=600)
+ggsave("Figures/Figure3_GAMS_IceOn_IceOff_IceDuration.png", width=7, height=7,units="in", dpi=600)
 
 
 # FIGURE 4  - predictors - ice on and off ----------------------------------------------------------------
