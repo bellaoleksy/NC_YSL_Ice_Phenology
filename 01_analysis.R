@@ -15,10 +15,12 @@ library(ggeffects)
 library(officer)
 library(dataRetrieval)
 library(lemon)
+library(Hmisc)
 
 #Look into QDO, PDO, ENSO
 source("0_functions.R")
 summarize <- dplyr::summarize
+rename <- dplyr::rename
 
 # Read in ice phenology data ----------------------------------------------
 Timing<-read.csv(file="Data/R/YSL_Ice.csv",header=T,sep=",")
