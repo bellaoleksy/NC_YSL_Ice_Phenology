@@ -68,6 +68,15 @@ median(yellowstone_phenology$IceOffJulian, na.rm=TRUE) #may 2024
 
 #Annual weather by water-year
 
+#Custom function to make sure sum() doesn't return 0 for column of NAs
+sum2 <- function(x) {
+  if(all(is.na(x))){
+    c(x[0],NA)} else {
+      sum(x,na.rm = TRUE)}
+}
+
+
+
 #Need to know how many water-years are have no data for certain variables
 # wx_QAQC <- Weather %>%
 #   mutate(
@@ -124,10 +133,10 @@ yellowstone_wx_wy <- Weather %>%
     month_name = month(Date, label = TRUE),
     water_year = dataRetrieval::calcWaterYear(Date)) %>%
   group_by(water_year) %>%
-  summarize(AnnualMax=sum(max.C,na.rm=T),
-            AnnualMin=sum(min.C,na.rm=T),
-            AnnualRain=sum(rain.mm,na.rm=T),
-            AnnualSnow=sum(snow.mm,na.rm=T))
+  summarize(AnnualMax=sum2(max.C),
+            AnnualMin=sum2(min.C),
+            AnnualRain=sum2(rain.mm),
+            AnnualSnow=sum2(snow.mm))
 
 #Get rid of Inf values and replace with NAs
 na_strings <- c(-Inf,Inf)
@@ -179,12 +188,12 @@ yellowstone_wx_seasons <- Weather %>%
                        Month %in% c("Dec","Jan","Feb") ~ "Winter")) %>%
   group_by(water_year, season) %>%
   dplyr::summarize(
-    Max = sum(max.C, na.rm = T),
-    Min = sum(min.C, na.rm = T),
-    Rain = sum(rain.mm, na.rm = T),
-    Snow = sum(snow.mm, na.rm = T),
-    TempSum = sum(mean.C, na.rm = T),
-    SnowDepth = max(SnowDepth.mm, na.rm = T)
+    Max = sum2(max.C),
+    Min = sum2(min.C),
+    Rain = sum2(rain.mm),
+    Snow = sum2(snow.mm),
+    TempSum = sum2(mean.C),
+    SnowDepth = max(SnowDepth.mm)
   ) %>%
   #Convert dataframe from long to wide format
   pivot_wider(
@@ -193,6 +202,7 @@ yellowstone_wx_seasons <- Weather %>%
     names_glue = "{season}{.value}",
     values_from = c(Max:SnowDepth)
   )
+
 
 #Monthly weather by water-year
 yellowstone_wx_monthly <- Weather %>%
@@ -204,12 +214,12 @@ yellowstone_wx_monthly <- Weather %>%
     water_year = dataRetrieval::calcWaterYear(Date)) %>%
   group_by(water_year, month_name) %>%
   dplyr::summarize(  
-    Max = sum(max.C, na.rm = T),
-    Min = sum(min.C, na.rm = T),
-    Rain = sum(rain.mm, na.rm = T),
-    Snow = sum(snow.mm, na.rm = T),
-    TempSum = sum(mean.C, na.rm = T),
-    SnowDepth = max(SnowDepth.mm, na.rm = T)
+    Max = sum2(max.C),
+    Min = sum2(min.C),
+    Rain = sum2(rain.mm),
+    Snow = sum2(snow.mm),
+    TempSum = sum2(mean.C),
+    SnowDepth = max(SnowDepth.mm)
   ) %>%
   #Convert dataframe from long to wide format
   pivot_wider(
@@ -220,13 +230,19 @@ yellowstone_wx_monthly <- Weather %>%
   ) 
 
 
+
+
+
+
 #Join them all together
 yellowstone_full <- yellowstone_phenology %>%
   left_join(., yellowstone_wx_wy) %>%
   left_join(., yellowstone_wx_monthly) %>%
   left_join(., yellowstone_wx_seasons)
+
 #Get rid of Inf values again
 yellowstone_full <- yellowstone_full %>% naniar::replace_with_na_all(condition = ~.x %in% na_strings)
+
 
 
 # CORR - ICE ON -----------------------------------------------------------
@@ -281,7 +297,8 @@ IceOnVars <- YSL_ice_correlations_trim %>%
   arrange(row) %>%
   filter(row=="j_on_wy") %>%
   filter(!grepl('Feb|Spring|Jun|j_off_wy|ice_days|Depth', column)) %>%
-  filter(!column %in% c("FallSnow", "WinterMax", "WinterMin")) %>%#corr with NovSnow
+  filter(!column %in% c("FallSnow", #corr with Nov Snow
+                        "WinterMin")) %>% #corr w/ winterMin
   arrange(p) %>%
   pull(column)
 
@@ -302,151 +319,710 @@ IceOffVars_full
 
 #Trim IceOffVars
 IceOffVars <- IceOffVars_full %>%
-  filter(!column %in% c("AprMin", #corr w SpringMin, AprTempSum
-                        "SpringTempSum", #corr w AprTempSum
-                        "SpringMax",#corr w AprMax
-                        "AnnualMax")) %>% #seems spurious-- correlates strong with summer
+  filter(!column %in% c("AprTempSum", #corr w AprMax
+                        "SpringMax",#corr w MayTempSum
+                        "SpringMin")) %>% #corr w SpringTempSum
+  filter(!grepl('Annual', column)) %>%
   pull(column)
 
 #Ice days variables
-IceDaysVars <- YSL_ice_correlations_trim %>%
+IceDaysVars_full <- YSL_ice_correlations_trim %>%
   group_by(row) %>%
   filter(p <= 0.01) %>% 
   arrange(row) %>%
   filter(row=="ice_days") %>%
   filter(!grepl('June', column)) %>%  #spurious likely relationships
+  arrange(p) %>%
   pull(column)
 
+#We need to narrow down the IceDaysVars How many are collinear? 
+YSL_collinear_trim %>% 
+  filter(row %in% IceDaysVars_full) %>%
+  arrange(row)
 
 # ~ MODELS - ICE ON ----------------------------------------------------------------
 
 ### I added Family Gamma here since observations are always > 0
-mod0_iceOn_new <- gam(j_on_wy ~ s(water_year),
+mod0_iceOn <- gam(j_on_wy ~ s(water_year),
                   family=Gamma(link="log"),
                   data = yellowstone_full,
                   correlation = corCAR1(form = ~ Year),
                   method = "REML")
-summary(mod0_iceOn_new)
+summary(mod0_iceOn)
 # summary(mod0_iceOn)
-draw(mod0_iceOn_new)
+draw(mod0_iceOn)
 # draw(mod0_iceOn)
-appraise(mod0_iceOn_new)
+appraise(mod0_iceOn)
 # appraise(mod0_iceOn)
 #These results are different as with Lusha's code, but still no trend
 
 ### Start with all fall variables that were highly correlated
 IceOnVars
 
-mod1_iceOn_new <- gam(j_on_wy ~ s(WinterTempSum) + s(FallMax) +
-                        s(FallRain) + s(FallTempSum) + s(WinterRain)  + s(NovSnow),
+mod1_iceOn <- gam(j_on_wy ~ s(NovSnow) + s(DecMin) +
+                        s(WinterTempSum) + s(DecTempSum) + s(WinterMax)  + s(JanMin),
                   family=Gamma(link="log"),
                   data = yellowstone_full,
                   # correlation = corCAR1(form = ~ Year),
                   method = "REML")
-summary(mod1_iceOn_new)
+summary(mod1_iceOn)
 # summary(mod1_iceOn)
-draw(mod1_iceOn_new)
+draw(mod1_iceOn)
 # draw(mod1_iceOn)
-appraise(mod1_iceOn_new)
-# appraise(mod1_iceOn_new)
+appraise(mod1_iceOn)
+# appraise(mod1_iceOn)
 
-mod2_iceOn_new <- gam(j_on_wy ~ s(WinterTempSum) + s(FallMax) +
-                        s(FallRain)  + s(WinterRain)  + s(NovSnow),
+mod2_iceOn <- gam(j_on_wy ~ s(NovSnow) + s(DecMin) + 
+                    s(DecTempSum) + s(WinterMax)  + s(JanMin),
                       family=Gamma(link="log"),
                       data = yellowstone_full,
                       method = "REML")
-summary(mod2_iceOn_new)
-draw(mod2_iceOn_new)
-appraise(mod2_iceOn_new)
+summary(mod2_iceOn)
+draw(mod2_iceOn)
+appraise(mod2_iceOn)
 
 
-mod3_iceOn_new <- gam(j_on_wy ~  s(WinterTempSum) + s(FallMax) +
-                        s(FallRain)   + s(NovSnow),
+mod3_iceOn <- gam(j_on_wy ~  s(NovSnow) + s(DecMin) + 
+                     s(WinterMax)  + s(JanMin),
                       family=Gamma(link="log"),
                       data = yellowstone_full,
                       method = "REML")
-summary(mod3_iceOn_new)
-draw(mod3_iceOn_new)
-appraise(mod3_iceOn_new)
+summary(mod3_iceOn)
+draw(mod3_iceOn)
+appraise(mod3_iceOn)
 
-mod4_iceOn_new <- gam(j_on_wy ~  s(FallMax) +
-                        s(FallRain)   + s(NovSnow),
+mod4_iceOn <- gam(j_on_wy ~   s(NovSnow) + s(DecMin) + 
+                     s(JanMin),
                       family=Gamma(link="log"),
                       data = yellowstone_full,
                       method = "REML")
-summary(mod4_iceOn_new)
-draw(mod4_iceOn_new)
-appraise(mod4_iceOn_new)
+summary(mod4_iceOn)
+draw(mod4_iceOn)
+appraise(mod4_iceOn)
 
 
-compareML(mod2_iceOn_new, mod3_iceOn_new) 
-compareML(mod3_iceOn_new, mod4_iceOn_new) 
+mod5_iceOn <- gam(j_on_wy ~   s(NovSnow) + s(DecMin),
+                  family=Gamma(link="log"),
+                  data = yellowstone_full,
+                  method = "REML")
+summary(mod5_iceOn)
+draw(mod5_iceOn)
+appraise(mod5_iceOn)
+
+compareML(mod2_iceOn, mod3_iceOn) 
+compareML(mod3_iceOn, mod4_iceOn) 
+compareML(mod5_iceOn, mod4_iceOn) 
 
 
+
+
+#.....  Ice On Figure -----------------------------------------------------------
+#annotate panel letters inside plot
+panelLetter.normal <- data.frame(
+  xpos = c(-Inf),
+  ypos =  c(Inf),
+  hjustvar = c(-0.5) ,
+  vjustvar = c(1.5))
+
+summary(mod4_iceOn)
+
+# >>>> Panel A -- Ice On vs. Cumul. Nov. Snow --------------------------------------
+
+new_data <-
+  with(yellowstone_full,
+       expand.grid(
+         NovSnow = seq(
+           min(NovSnow, na.rm = TRUE),
+           max(NovSnow, na.rm =
+                 TRUE),
+           length = 200
+         ),
+         DecMin = median(DecMin, na.rm =
+                             TRUE),
+         JanMin = median(JanMin, na.rm=TRUE)
+       ))
+
+ilink <- family(mod4_iceOn)$linkinv
+pred_NovSnow <- predict(mod4_iceOn, new_data, type = "link", se.fit = TRUE)
+pred_NovSnow <- cbind(pred_NovSnow, new_data)
+pred_NovSnow <- transform(pred_NovSnow, lwr_ci = ilink(fit - (2 * se.fit)),
+                          upr_ci = ilink(fit + (2 * se.fit)),
+                          fitted = ilink(fit))
+
+pred_NovSnow <- pred_NovSnow %>%
+  select(NovSnow, lwr_ci:fitted) %>%
+  dplyr::rename(lwr_ci_NovSnow = lwr_ci,
+                upr_ci_NovSnow = upr_ci,
+                fitted_NovSnow = fitted)
+
+#Modify axis labels: fed DOY -> dates
+breaks_IceOn<-c(60, 80, 100, 120)
+# c("30-Nov","20-Dec","10-Jan","30-Jan") #corresponding cal dates
+
+
+Fig3A <-
+  ggplot(pred_NovSnow, aes(x = NovSnow, y = fitted_NovSnow)) +
+  geom_ribbon(aes(ymin = lwr_ci_NovSnow, ymax = upr_ci_NovSnow), alpha = 0.2) +
+  geom_line() +
+  geom_point(data=yellowstone_full, aes(x=NovSnow,
+                             y=j_on_wy,
+                             fill=water_year), 
+             shape=21, alpha=0.9)+
+  labs(x="Cumulative Nov. Snow (mm)",
+       y="Ice-on date")+
+  scale_y_continuous(breaks=breaks_IceOn,
+                     labels=c("30-Nov","20-Dec","10-Jan","30-Jan"))+
+  # scale_x_continuous(breaks=c(-35,-30,-25,-20,-15),limits=c(-35,-15))+
+  grafify::scale_fill_grafify(palette = "grey_conti", name = "Year")+ #yellow_conti scheme
+  theme_pubr(border=TRUE, base_size=8)+
+  theme(plot.margin=unit(c(0.5,0,0.5,0.5), "lines"),
+        axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2)) +
+  geom_text(data=panelLetter.normal,
+            aes(x=xpos,
+                y=ypos,
+                hjust=hjustvar,
+                vjust=vjustvar,
+                label="a",
+                fontface="bold"))
+
+
+# # >>>>  Panel B -- Ice On vs. Cumulative min Dec  -------------------------------------
+
+summary(mod4_iceOn)
+
+new_data <-
+  with(yellowstone_full,
+       expand.grid(
+         DecMin = seq(
+           min(DecMin, na.rm = TRUE),
+           max(DecMin, na.rm =
+                 TRUE),
+           length = 200
+         ),
+         NovSnow = median(NovSnow, na.rm =
+                            TRUE),
+         JanMin = median(JanMin, na.rm=TRUE)
+       ))
+
+
+ilink <- family(mod4_iceOn)$linkinv
+pred_DecMin <- predict(mod4_iceOn, new_data, type = "link", se.fit = TRUE)
+pred_DecMin <- cbind(pred_DecMin, new_data)
+pred_DecMin <- transform(pred_DecMin, lwr_ci = ilink(fit - (2 * se.fit)),
+                          upr_ci = ilink(fit + (2 * se.fit)),
+                          fitted = ilink(fit))
+pred_DecMin <- pred_DecMin %>%
+  select(DecMin, lwr_ci:fitted) %>%
+  dplyr::rename(lwr_ci_DecMin = lwr_ci,
+                upr_ci_DecMin = upr_ci,
+                fitted_DecMin = fitted)
+
+#Modify axis labels: fed DOY -> dates
+breaks_IceOn<-c(60, 80, 100, 120)
+# c("30-Nov","20-Dec","10-Jan","30-Jan") #corresponding cal dates
+
+
+Fig3B <-
+  ggplot(pred_DecMin, aes(x = DecMin, y = fitted_DecMin)) +
+  geom_ribbon(aes(ymin = lwr_ci_DecMin, ymax = upr_ci_DecMin), alpha = 0.2) +
+  geom_line() +
+  geom_point(data=yellowstone_full, aes(x=DecMin,
+                                        y=j_on_wy,
+                                        fill=water_year), 
+             shape=21,alpha=0.9)+
+  labs(x="Cumulative min. Dec. temperatures (°C)",
+       y="Ice-on date")+
+  scale_y_continuous(breaks=breaks_IceOn,
+                     labels=c("30-Nov","20-Dec","10-Jan","30-Jan"))+
+  # scale_x_continuous(breaks=labels_IsoMax_fed,labels=c("12-Dec","01-Jan","21-Jan"),limits=c(70,120))+
+  grafify::scale_fill_grafify(palette = "grey_conti", name = "Year")+ #yellow_conti scheme
+  theme_pubr(border=TRUE, base_size=8)+
+  theme(
+    axis.title.y=element_blank(),
+    plot.margin=unit(c(0.5,0,0.5,0), "lines"),
+    axis.ticks.length.y = unit(0, "pt"))+
+  geom_text(data=panelLetter.normal,
+            aes(x=xpos,
+                y=ypos,
+                hjust=hjustvar,
+                vjust=vjustvar,
+                label="b",
+                fontface="bold"))
+
+
+
+
+
+# # >>>>  Panel C -- Ice On vs. Cumul min Jan -------------------------------------
+summary(mod4_iceOn)
+
+new_data <-
+  with(yellowstone_full,
+       expand.grid(
+         JanMin = seq(
+           min(JanMin, na.rm = TRUE),
+           max(JanMin, na.rm =
+                 TRUE),
+           length = 200
+         ),
+         NovSnow = median(NovSnow, na.rm =
+                             TRUE),
+         DecMin = median(DecMin, na.rm=TRUE)
+       ))
+
+ilink <- family(mod4_iceOn)$linkinv
+pred_JanMin <- predict(mod4_iceOn, new_data, type = "link", se.fit = TRUE)
+pred_JanMin <- cbind(pred_JanMin, new_data)
+pred_JanMin <- transform(pred_JanMin, lwr_ci = ilink(fit - (2 * se.fit)),
+                           upr_ci = ilink(fit + (2 * se.fit)),
+                           fitted = ilink(fit))
+pred_JanMin <- pred_JanMin %>%
+  select(JanMin, lwr_ci:fitted) %>%
+  dplyr::rename(lwr_ci_JanMin = lwr_ci,
+                upr_ci_JanMin = upr_ci,
+                fitted_JanMin = fitted)
+
+breaks_IceOn<-c(60, 80, 100, 120)
+# c("30-Nov","20-Dec","10-Jan","30-Jan") #corresponding cal dates
+
+
+Fig3C <-
+  ggplot(pred_JanMin, aes(x = JanMin, y = fitted_JanMin)) +
+  geom_ribbon(aes(ymin = lwr_ci_JanMin, ymax = upr_ci_JanMin), alpha = 0.2) +
+  geom_line() +
+  geom_point(data=yellowstone_full, aes(x=JanMin,
+                             y=j_on_wy,
+                             fill=water_year), 
+             shape=21,alpha=0.9)+
+  labs(x="Cumulative min. Jan. temperatures (°C)",
+       y="Ice-on date")+
+  scale_y_continuous(breaks=breaks_IceOn,
+                     labels=c("30-Nov","20-Dec","10-Jan","30-Jan"))+
+  # scale_x_continuous(breaks=c(0,75,150,225,300,375),limits=c(0,400))+
+  grafify::scale_fill_grafify(palette = "grey_conti", name = "Year")+ #yellow_conti scheme
+  theme_pubr(border=TRUE, base_size=8)+
+  theme(
+    axis.text.y=element_blank(),
+    axis.ticks.y=element_blank(),
+    axis.title.y=element_blank(),
+    plot.margin=unit(c(0.5,0,0.5,0), "lines"),
+    axis.ticks.length.y = unit(0, "pt"))+
+  geom_text(data=panelLetter.normal,
+            aes(x=xpos,
+                y=ypos,
+                hjust=hjustvar,
+                vjust=vjustvar,
+                label="c",
+                fontface="bold"))
 
 
 # ~ MODELS - ICE OFF----------------------------------------------------------------
 
-mod0_iceOff_new <- gam(j_off_wy ~ s(water_year),
+mod0_iceOff <- gam(j_off_wy ~ s(water_year),
                    family=Gamma(link="log"),
                    data = yellowstone_full,
                    # correlatiOff = corCAR1(form = ~ Year),
                    method = "REML")
-summary(mod0_iceOff_new)
-draw(mod0_iceOff_new)
-appraise(mod0_iceOff_new)
+summary(mod0_iceOff)
+draw(mod0_iceOff)
+appraise(mod0_iceOff)
 #These are the same as with Lusha's code
 
 
 IceOffVars
 
-mod1_iceOff_new <- gam(j_off_wy ~ s(AprTempSum) + s(AprMax) + s(MayTempSum) +
-                         s(MayMin) + s(SpringRain) + s(SpringMin) + s(SpringSnow),
+mod1_iceOff <- gam(j_off_wy ~ s(AprMax) + s(SpringTempSum) + s(MayTempSum) +
+                         s(MayMin) + s(SpringSnow) + s(AprMin) + s(MarMax),
                    family=Gamma(link="log"),
                    data = yellowstone_full,
                    # correlatiOff = corCAR1(form = ~ Year),
                    method = "REML")
-summary(mod1_iceOff_new)
-draw(mod1_iceOff_new)
-appraise(mod1_iceOff_new)
-#Identical. Great.
+summary(mod1_iceOff)
+draw(mod1_iceOff)
+appraise(mod1_iceOff)
 
 #Mod 2
-mod2_iceOff_new <- gam(j_off_wy ~  s(AprTempSum) + s(AprMax) + s(MayTempSum) +
-                     s(MayMin) + s(SpringMin) + s(SpringSnow),
+mod2_iceOff <- gam(j_off_wy ~  s(AprMax) + s(SpringTempSum) + s(MayTempSum) +
+                     s(MayMin) + s(SpringSnow) + s(AprMin),
                    family=Gamma(link="log"),
                    data = yellowstone_full,
                    # correlatiOff = corCAR1(form = ~ Year),
                    method = "REML")
-summary(mod2_iceOff_new)
-draw(mod2_iceOff_new)
-appraise(mod2_iceOff_new)
+summary(mod2_iceOff)
+draw(mod2_iceOff)
+appraise(mod2_iceOff)
 
 #Mod 3
-mod3_iceOff_new <- gam(j_off_wy ~  s(AprTempSum) + s(AprMax)  +
-                         s(MayMin) + s(SpringMin) + s(SpringSnow),
+mod3_iceOff <- gam(j_off_wy ~  s(AprMax) + s(SpringTempSum) +
+                     s(MayMin) + s(SpringSnow) + s(AprMin),
                        family=Gamma(link="log"),
                        data = yellowstone_full,
                        # correlatiOff = corCAR1(form = ~ Year),
                        method = "REML")
-summary(mod3_iceOff_new)
-draw(mod3_iceOff_new)
-appraise(mod3_iceOff_new)
+summary(mod3_iceOff)
+draw(mod3_iceOff)
+appraise(mod3_iceOff)
 
 #Mod 4
-mod4_iceOff_new <- gam(j_off_wy ~  s(AprMax)  +
-                         s(MayMin) + s(SpringMin) + s(SpringSnow),
+mod4_iceOff <- gam(j_off_wy ~  s(AprMax) + s(SpringTempSum) +
+                     s(MayMin) + s(SpringSnow) ,
                        family=Gamma(link="log"),
                        data = yellowstone_full,
                        # correlatiOff = corCAR1(form = ~ Year),
                        method = "REML")
-summary(mod4_iceOff_new)
-draw(mod4_iceOff_new)
-appraise(mod4_iceOff_new)
+summary(mod4_iceOff)
+draw(mod4_iceOff)
+appraise(mod4_iceOff)
+
+#Mod 5
+mod5_iceOff <- gam(j_off_wy ~  s(AprMax) + s(SpringTempSum) +
+                     s(MayMin) ,
+                   family=Gamma(link="log"),
+                   data = yellowstone_full,
+                   # correlatiOff = corCAR1(form = ~ Year),
+                   method = "REML")
+summary(mod5_iceOff)
+draw(mod5_iceOff)
+appraise(mod5_iceOff)
 
 
-compareML(mod3_iceOff_new, mod4_iceOff_new)
-compareML(mod3_iceOff_new, mod2_iceOff_new)
+compareML(mod3_iceOff, mod4_iceOff)
+compareML(mod3_iceOff, mod2_iceOff)
+compareML(mod5_iceOff, mod4_iceOff)
+
+
+#.....  Ice Off Figure -----------------------------------------------------------
+
+summary(mod4_iceOff)
+
+# >>>> Panel A -- Ice Off vs. AprMax ------------------------------------
+
+
+new_data <-
+  with(yellowstone_full,
+       expand.grid(
+         AprMax = seq(
+           min(AprMax, na.rm = TRUE),
+           max(AprMax, na.rm =
+                 TRUE),
+           length = 200
+         ),
+         SpringTempSum = median(SpringTempSum, na.rm =
+                               TRUE),
+         MayMin = median(MayMin, na.rm=TRUE),
+         SpringSnow = median(SpringSnow, na.rm=TRUE)
+       ))
+
+ilink <- family(mod4_iceOff)$linkinv
+pred_AprMax <- predict(mod4_iceOff, new_data, type = "link", se.fit = TRUE)
+pred_AprMax <- cbind(pred_AprMax, new_data)
+pred_AprMax <- transform(pred_AprMax, lwr_ci = ilink(fit - (2 * se.fit)),
+                             upr_ci = ilink(fit + (2 * se.fit)),
+                             fitted = ilink(fit))
+pred_AprMax <- pred_AprMax %>%
+  select(AprMax, lwr_ci:fitted) %>%
+  dplyr::rename(lwr_ci_AprMax = lwr_ci,
+                upr_ci_AprMax = upr_ci,
+                fitted_AprMax = fitted)
+
+#Modify axis labels: 
+breaks_IceOff<-c(210, 225, 240, 255)
+# figure out what DOY corresponds to as a date
+# c("29-Apr","14-May","29-May","13-Jun")
+
+
+Fig3D <-
+  ggplot(pred_AprMax, aes(x = AprMax, y = fitted_AprMax)) +
+  geom_ribbon(aes(ymin = lwr_ci_AprMax, ymax = upr_ci_AprMax), alpha = 0.2) +
+  geom_line() +
+  geom_point(data=yellowstone_full, aes(x=AprMax,
+                              y=j_off_wy,
+                              fill=water_year), 
+             shape=21, alpha=0.9)+
+  labs(x="Cumulative max. April temperatures (°C)",
+  y="Ice-off date")+
+  grafify::scale_fill_grafify(palette = "grey_conti", name = "Year")+ #yellow_conti scheme
+  scale_y_continuous(breaks=breaks_IceOff,
+                     labels=c("29-Apr","14-May","29-May","13-Jun"))+
+  theme_pubr(border=TRUE, base_size=8)+
+  theme(plot.margin=unit(c(0.5,0,0.5,0.5), "lines"),
+        axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2)) +
+  geom_text(data=panelLetter.normal,
+            aes(x=xpos,
+                y=ypos,
+                hjust=hjustvar,
+                vjust=vjustvar,
+                label="d",
+                fontface="bold"))
+
+
+# >>>> Panel B -- Ice Off vs. SpringTempSum -----------------------------------
+summary(mod4_iceOff)
+
+
+new_data <-
+  with(yellowstone_full,
+       expand.grid(
+         SpringTempSum = seq(
+           min(SpringTempSum, na.rm = TRUE),
+           max(SpringTempSum, na.rm =
+                 TRUE),
+           length = 200
+         ),
+         AprMax = median(AprMax, na.rm =
+                               TRUE),
+         MayMin = median(MayMin, na.rm=TRUE),
+         SpringSnow = median(SpringSnow, na.rm=TRUE)
+       ))
+
+
+ilink <- family(mod4_iceOff)$linkinv
+pred_SpringTempSum <- predict(mod4_iceOff, new_data, type = "link", se.fit = TRUE)
+pred_SpringTempSum <- cbind(pred_SpringTempSum, new_data)
+pred_SpringTempSum <- transform(pred_SpringTempSum, lwr_ci = ilink(fit - (2 * se.fit)),
+                             upr_ci = ilink(fit + (2 * se.fit)),
+                             fitted = ilink(fit))
+pred_SpringTempSum <- pred_SpringTempSum %>%
+  select(SpringTempSum, lwr_ci:fitted) %>%
+  dplyr::rename(lwr_ci_SpringTempSum = lwr_ci,
+                upr_ci_SpringTempSum = upr_ci,
+                fitted_SpringTempSum = fitted)
+
+breaks_IceOff<-c(210, 225, 240, 255)
+# figure out what DOY corresponds to as a date
+# c("29-Apr","14-May","29-May","13-Jun")
+
+
+Fig3E <-
+  ggplot(pred_SpringTempSum, aes(x = SpringTempSum, y = fitted_SpringTempSum)) +
+  geom_ribbon(aes(ymin = lwr_ci_SpringTempSum, ymax = upr_ci_SpringTempSum), alpha = 0.2) +
+  geom_line() +
+  geom_point(data=yellowstone_full, aes(x=SpringTempSum,
+                              y=j_off_wy,
+                              fill=water_year), 
+             shape=21, alpha=0.9)+
+  labs(x="Cumulative spring temperatures (°C)",
+       y="Ice off")+
+  grafify::scale_fill_grafify(palette = "grey_conti", name = "Year")+ #yellow_conti scheme
+  scale_y_continuous(breaks=breaks_IceOff,
+                     labels=c("29-Apr","14-May","29-May","13-Jun"))+
+  theme_pubr(border=TRUE, base_size=8)+
+  theme(axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        axis.title.y=element_blank(),
+        plot.margin=unit(c(0.5,0,0.5,0), "lines"),
+        axis.ticks.length.y = unit(0, "pt"))+
+  geom_text(data=panelLetter.normal,
+            aes(x=xpos,
+                y=ypos,
+                hjust=hjustvar,
+                vjust=vjustvar,
+                label="e",
+                fontface="bold"))
+
+
+
+# >>>> Panel C - Ice off versus MayMin ----------------------------------
+summary(mod4_iceOff)
+
+
+new_data <-
+  with(yellowstone_full,
+       expand.grid(
+         MayMin = seq(
+           min(MayMin, na.rm = TRUE),
+           max(MayMin, na.rm =
+                 TRUE),
+           length = 200
+         ),
+         AprMax = median(AprMax, na.rm =
+                               TRUE),
+         SpringTempSum = median(SpringTempSum, na.rm=TRUE),
+         SpringSnow = median(SpringSnow, na.rm=TRUE)
+       ))
+
+ilink <- family(mod4_iceOff)$linkinv
+pred_MayMin <- predict(mod4_iceOff, new_data, type = "link", se.fit = TRUE)
+pred_MayMin <- cbind(pred_MayMin, new_data)
+pred_MayMin <- transform(pred_MayMin, lwr_ci = ilink(fit - (2 * se.fit)),
+                            upr_ci = ilink(fit + (2 * se.fit)),
+                            fitted = ilink(fit))
+pred_MayMin <- pred_MayMin %>%
+  select(MayMin, lwr_ci:fitted) %>%
+  dplyr::rename(lwr_ci_MayMin = lwr_ci,
+                upr_ci_MayMin = upr_ci,
+                fitted_MayMin = fitted)
+
+
+breaks_IceOff<-c(210, 225, 240, 255)
+# figure out what DOY corresponds to as a date
+# c("29-Apr","14-May","29-May","13-Jun")
+
+
+Fig3F <-
+  ggplot(pred_MayMin, aes(x = MayMin, y = fitted_MayMin)) +
+  geom_ribbon(aes(ymin = lwr_ci_MayMin, ymax = upr_ci_MayMin), alpha = 0.2) +
+  geom_line() +
+  geom_point(data=yellowstone_full, aes(x=MayMin,
+                              y=j_off_wy,
+                              fill=water_year), 
+             shape=21, alpha=0.9)+
+  labs(x="Cumulative min. May temperatures (C)",
+       y="Ice off")+
+  grafify::scale_fill_grafify(palette = "grey_conti", name = "Year")+ #yellow_conti scheme
+  scale_y_continuous(breaks=breaks_IceOff,
+                     labels=c("29-Apr","14-May","29-May","13-Jun"))+
+  theme_pubr(border=TRUE, base_size=8)+
+  theme(axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        axis.title.y=element_blank(),
+        plot.margin=unit(c(0.5,0,0.5,0), "lines"),
+        axis.ticks.length.y = unit(0, "pt"))+
+  geom_text(data=panelLetter.normal,
+            aes(x=xpos,
+                y=ypos,
+                hjust=hjustvar,
+                vjust=vjustvar,
+                label="f",
+                fontface="bold"))
+
+# >>>> Panel D - Ice off versus SpringSnow ----------------------------------
+summary(mod4_iceOff)
+
+
+new_data <-
+  with(yellowstone_full,
+       expand.grid(
+         SpringSnow = seq(
+           min(SpringSnow, na.rm = TRUE),
+           max(SpringSnow, na.rm =
+                 TRUE),
+           length = 200
+         ),
+         AprMax = median(AprMax, na.rm =
+                           TRUE),
+         SpringTempSum = median(SpringTempSum, na.rm=TRUE),
+         MayMin = median(MayMin, na.rm=TRUE)
+       ))
+
+ilink <- family(mod4_iceOff)$linkinv
+pred_SpringSnow <- predict(mod4_iceOff, new_data, type = "link", se.fit = TRUE)
+pred_SpringSnow <- cbind(pred_SpringSnow, new_data)
+pred_SpringSnow <- transform(pred_SpringSnow, lwr_ci = ilink(fit - (2 * se.fit)),
+                         upr_ci = ilink(fit + (2 * se.fit)),
+                         fitted = ilink(fit))
+pred_SpringSnow <- pred_SpringSnow %>%
+  select(SpringSnow, lwr_ci:fitted) %>%
+  dplyr::rename(lwr_ci_SpringSnow = lwr_ci,
+                upr_ci_SpringSnow = upr_ci,
+                fitted_SpringSnow = fitted)
+
+
+breaks_IceOff<-c(210, 225, 240, 255)
+# figure out what DOY corresponds to as a date
+# c("29-Apr","14-May","29-May","13-Jun")
+
+
+Fig3G <-
+  ggplot(pred_SpringSnow, aes(x = SpringSnow, y = fitted_SpringSnow)) +
+  geom_ribbon(aes(ymin = lwr_ci_SpringSnow, ymax = upr_ci_SpringSnow), alpha = 0.2) +
+  geom_line() +
+  geom_point(data=yellowstone_full, aes(x=SpringSnow,
+                                        y=j_off_wy,
+                                        fill=water_year), 
+             shape=21, alpha=0.9)+
+  labs(x="Cumulative spring snow (mm)",
+       y="Ice off")+
+  grafify::scale_fill_grafify(palette = "grey_conti", name = "Year")+ #yellow_conti scheme
+  scale_y_continuous(breaks=breaks_IceOff,
+                     labels=c("29-Apr","14-May","29-May","13-Jun"))+
+  theme_pubr(border=TRUE, base_size=8)+
+  theme(axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        axis.title.y=element_blank(),
+        plot.margin=unit(c(0.5,0,0.5,0), "lines"),
+        axis.ticks.length.y = unit(0, "pt"))+
+  geom_text(data=panelLetter.normal,
+            aes(x=xpos,
+                y=ypos,
+                hjust=hjustvar,
+                vjust=vjustvar,
+                label="g",
+                fontface="bold"))
+
+
+# FIGURE 3  - ice on and off drivers ----------------------------------------------------------------
+##Vertically aligned
+Fig3A_vert <- Fig3A +
+  theme(plot.margin=unit(c(0,0.1,0.3,0.5), "lines"),
+        axis.title.y=element_blank(),
+        axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2))+
+  labs(title="Ice-on")
+Fig3B_vert <- Fig3B +
+  theme(plot.margin=unit(c(0,0.1,0.3,0.5), "lines"),
+        axis.ticks.y=element_line(),
+        axis.ticks.length.y = unit(0.1, "cm"),
+        axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2))
+Fig3C_vert <- Fig3C +
+  theme(plot.margin=unit(c(0,0.1,0,0.5), "lines"),
+        axis.ticks.y=element_line(),
+        axis.ticks.length.y = unit(0.1, "cm"),
+        axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2))
+
+Fig3D_vert <- Fig3D +
+  theme(plot.margin=unit(c(0,0.1,0.3,0.5), "lines"),
+        axis.title.y=element_blank(),
+        axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2))+
+  labs(title="Ice-off")
+Fig3E_vert <- Fig3E +
+  theme(plot.margin=unit(c(0,0.1,0.3,0.5), "lines"),
+        axis.ticks.y=element_line(),
+        axis.ticks.length.y = unit(0.1, "cm"),
+        axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2))
+Fig3F_vert <- Fig3F +
+  theme(plot.margin=unit(c(0,0.1,0.3,0.5), "lines"),
+        axis.ticks.y=element_line(),
+        axis.ticks.length.y = unit(0.1, "cm"),
+        axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2))
+Fig3G_vert <- Fig3G +
+  theme(plot.margin=unit(c(0,0.1,0,0.5), "lines"),
+        axis.ticks.y=element_line(),
+        axis.ticks.length.y = unit(0.1, "cm"),
+        axis.text.y = element_text(angle = 45, hjust=0.5, vjust=1.2))
+
+combined <- (Fig3A_vert+ #a
+               Fig3D_vert+ #d
+               Fig3B_vert+ #b
+               Fig3E_vert+ #e
+               Fig3C_vert+ #c
+               Fig3F_vert+
+               patchwork::plot_spacer()+
+               Fig3G_vert) & #f
+  scale_fill_gradient( low = "white", high = "black",
+                       guide = guide_colorbar(label = TRUE,
+                                              draw.ulim = TRUE, 
+                                              draw.llim = TRUE,
+                                              frame.colour = "black",
+                                              ticks = TRUE, 
+                                              nbin = 10,
+                                              label.position = "bottom",
+                                              barwidth = 10,
+                                              barheight = 1.3, 
+                                              title.vjust = 0.75,
+                                              direction = 'horizontal'),
+                       "Year") &
+  theme(legend.position="bottom",
+        plot.title = element_text(hjust = 0.5),
+        legend.text = element_text(size=8))
+
+combined <- combined  +
+  patchwork::plot_layout(ncol = 2, guides="collect")
+
+combined
+# ggsave("Figures/Figure3_GAMS_IceOn_IceOff.pdf", width=6, height=8,units="in", dpi=600)
+ggsave("Figures/Figure3_GAMS_IceOn_IceOff.png", width=6, height=8,units="in", dpi=600)
+
+
 
 
 # ~ ANNUAL Max snow depth ----------------------------------------------------------------
