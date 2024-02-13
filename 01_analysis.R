@@ -333,7 +333,7 @@ duration_stats
 
 # write csv of gam summaries ####
 bind_rows(on_stats, off_stats, duration_stats) %>%
-  write_csv("Figures/Tables/gam_stat_table.csv")
+  write_csv("Figures/MS/gam_stat_table.csv")
 
 
 
