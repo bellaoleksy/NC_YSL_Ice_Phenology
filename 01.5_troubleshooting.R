@@ -1793,6 +1793,33 @@ compareML(mod2_iceDur, mod4_iceDur) #mod4 wins!
 compareML(mod5_iceDur, mod4_iceDur) #mod4 wins!
 
 
+# Export Table Ice On Models ----------------------------------------------
+
+models <- list(
+  mod1_iceDur,
+  mod2_iceDur,
+  mod3_iceDur,
+  mod4_iceDur,
+  mod5_iceDur
+)
+
+compile_gam_outputs <- function(models) {
+  map_df(models, ~{
+    tidied <- tidy(.x)
+    dev_exp <- 1 - .x$deviance / .x$null.deviance
+    log_likelihood <- as.numeric(logLik(.x))
+    aic <- AIC(.x)
+    bind_cols(tidied, dev_exp = dev_exp, log_likelihood = log_likelihood, aic = aic)
+  }, .id = "model_name")
+}
+
+# Compile GAM model output for Ice On
+compiled_outputs_iceon <- compile_gam_outputs(models) %>%
+  write_csv("Figures/MS/gam_stat_table_YSL_ice_duration.csv")
+
+
+
+
 
 # * -----------------------------------------------------------------------
 # * -----------------------------------------------------------------------
