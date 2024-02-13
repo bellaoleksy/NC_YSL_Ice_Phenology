@@ -616,6 +616,33 @@ Fig3C <-
                 fontface="bold"))
 
 
+# Export Table Ice On Models ----------------------------------------------
+
+models <- list(
+  mod1_iceOn,
+  mod2_iceOn,
+  mod3_iceOn,
+  mod4_iceOn,
+  mod5_iceOn
+)
+
+compile_gam_outputs <- function(models) {
+  map_df(models, ~{
+    tidied <- tidy(.x)
+    dev_exp <- 1 - .x$deviance / .x$null.deviance
+    log_likelihood <- as.numeric(logLik(.x))
+    aic <- AIC(.x)
+    bind_cols(tidied, dev_exp = dev_exp, log_likelihood = log_likelihood, aic = aic)
+  }, .id = "model_name")
+}
+
+# Compile GAM model output for Ice On
+compiled_outputs_iceon <- compile_gam_outputs(models) %>%
+  write_csv("Figures/MS/gam_stat_table_YSL_ice_on.csv")
+
+
+
+
 # ~ MODELS - ICE OFF----------------------------------------------------------------
 
 mod0_iceOff <- gam(j_off_wy ~ s(water_year),
@@ -691,7 +718,7 @@ compareML(mod3_iceOff, mod2_iceOff)
 compareML(mod5_iceOff, mod4_iceOff)
 
 
-#.....  Ice Off Figure -----------------------------------------------------------
+# Figure 3 - ice on and off drivers -----------------------------------------------------------
 
 summary(mod4_iceOff)
 
@@ -951,7 +978,32 @@ Fig3G <-
                 fontface="bold"))
 
 
-# FIGURE 3  - ice on and off drivers ----------------------------------------------------------------
+# Export Table Ice Off Models ----------------------------------------------
+
+models <- list(
+  mod1_iceOff,
+  mod2_iceOff,
+  mod3_iceOff,
+  mod4_iceOff,
+  mod5_iceOff
+)
+
+compile_gam_outputs <- function(models) {
+  map_df(models, ~{
+    tidied <- tidy(.x)
+    dev_exp <- 1 - .x$deviance / .x$null.deviance
+    log_likelihood <- as.numeric(logLik(.x))
+    aic <- AIC(.x)
+    bind_cols(tidied, dev_exp = dev_exp, log_likelihood = log_likelihood, aic = aic)
+  }, .id = "model_name")
+}
+
+# Compile GAM model output for Ice On
+compiled_outputs_iceon <- compile_gam_outputs(models) %>%
+  write_csv("Figures/MS/gam_stat_table_YSL_ice_off.csv")
+
+
+# ........>> COMPILE FIGURE 3 <<........ ----------------------------------------------------------------
 ##Vertically aligned
 Fig3A_vert <- Fig3A +
   theme(plot.margin=unit(c(0,0.1,0.3,0.5), "lines"),
@@ -996,7 +1048,7 @@ combined <- (Fig3A_vert+ #a
                Fig3E_vert+ #e
                Fig3C_vert+ #c
                Fig3F_vert+
-               patchwork::plot_spacer()+
+               patchwork::guide_area()+ #place legend in plot space
                Fig3G_vert) & #f
   scale_fill_gradient( low = "white", high = "black",
                        guide = guide_colorbar(label = TRUE,
@@ -1019,9 +1071,656 @@ combined <- combined  +
   patchwork::plot_layout(ncol = 2, guides="collect")
 
 combined
-# ggsave("Figures/Figure3_GAMS_IceOn_IceOff.pdf", width=6, height=8,units="in", dpi=600)
-ggsave("Figures/Figure3_GAMS_IceOn_IceOff.png", width=6, height=8,units="in", dpi=600)
+# ggsave("Figures/MS/Figure3_GAMS_IceOn_IceOff.pdf", width=6, height=8,units="in", dpi=600)
+ggsave("Figures/MS/Figure3_GAMS_IceOn_IceOff.png", width=6, height=8,units="in", dpi=600)
 
+
+# FIGURE 4  - trends in drivers ----------------------------------------------------------------
+
+
+# >>>> Panel A - Nov Snow -------------------------------------------------
+
+
+mod0_NovSnow <- gam(NovSnow ~ s(water_year) ,
+                      # family=Gamma(link="log"),
+                      data = yellowstone_full,
+                      # correlation = corCAR1(form = ~ water_year),
+                      method = "REML")
+summary(mod0_NovSnow)
+draw(mod0_NovSnow)
+# report(mod0_NovSnow)
+# acf(residuals(mod0_NovSnow), lag.max = 10, plot = TRUE, main = "ACF of Residuals")
+#No temporal autocorrelation
+
+
+#Test for a change in the rate of change using 1st derivatives
+#Extract years for next step
+years <- with(yellowstone_full, data.frame(water_year = seq(min(water_year, na.rm=TRUE),
+                                                            max(water_year, na.rm=TRUE),
+                                                            length.out = 200)))
+
+#Create a dataframe with predicted ("fitted") values from the GAM and water_year, on the response scale.
+NovSnowPred <- cbind(years,
+                       data.frame(predict(
+                         mod0_NovSnow, years,
+                         type = "response",
+                         se.fit = TRUE
+                       )))
+
+### Calculate upper and lower bounds
+NovSnowPred <- transform(NovSnowPred,
+                           upper = fit + (2 * se.fit),
+                           lower = fit - (2 * se.fit))
+
+#Extract first derivative of the trend
+Term = "water_year"
+m1.d <- Deriv(mod0_NovSnow) #in theory gratia::derivatives should work here
+m1.d.2 <- gratia::derivatives(mod0_NovSnow)
+m1.d.3 <- gratia::fderiv(mod0_NovSnow)
+
+#Calculate confidence intervals around the first derivative
+m1.dci <- confint(m1.d, term = "water_year")
+
+
+#Extract periods of increasing or decreasing trends
+m1.dsig <- signifD(NovSnowPred$fit,
+                   d = m1.d[[Term]]$deriv,
+                   m1.dci[[Term]]$upper,
+                   m1.dci[[Term]]$lower)
+
+#Plot the first derivative 
+plot.Deriv(m1.d)
+## Positive rate of change in cumulative snow both the early part of the record and late part of the record
+
+#Add a column for periods of time when the trend is accelerating
+NovSnowPred <- cbind(NovSnowPred, data.frame(incr=unlist(m1.dsig$incr)),
+                       data.frame(decr=unlist(m1.dsig$decr)))
+
+
+Fig4A <- NovSnowPred %>%
+  ggplot(aes(x=water_year,y=fit))+
+  geom_point(data=yellowstone_full, aes(x=water_year, y=NovSnow),
+             shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
+  # geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
+  # geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
+  labs(x="Year",y="Cumulative November snow (mm)")+
+  coord_cartesian(xlim=c(1925,2025))+
+  scale_x_continuous(breaks=seq(1930, 2020, 15))+
+  # scale_y_continuous(breaks=seq(22,30,2))+
+  theme_pubr(base_size=8, border=TRUE)+
+  geom_text(data=panelLetter.normal,
+            aes(x=xpos,
+                y=ypos,
+                hjust=hjustvar,
+                vjust=vjustvar,
+                label="a",
+                fontface="bold"))
+
+Fig4A
+
+
+# >>>> Panel B - Cumul Dec min --------------------------------------------
+
+
+mod0_DecMin <- gam(DecMin ~ s(water_year),
+                          # family=Gamma(link="log"),
+                          data = yellowstone_full,
+                          correlation = corARMA(form = ~ 1 | water_year, p = 1), 
+                          #specifies the correlation argument of gam
+                          method = "REML")
+summary(mod0_DecMin)
+draw(mod0_DecMin)
+
+# acf(residuals(mod0_DecMin), lag.max = 10, plot = TRUE, main = "ACF of Residuals")
+#Lag 1 temporal autocorrelation
+
+
+#Test for a change in the rate of change using 1st derivatives
+#Extract years for next step
+years <- with(yellowstone_full, data.frame(water_year = seq(min(water_year, na.rm=TRUE),
+                                                            max(water_year, na.rm=TRUE),
+                                                            length.out = 200)))
+
+#Create a dataframe with predicted ("fitted") values from the GAM and water_year, on the response scale.
+DecMinPred <- cbind(years,
+                           data.frame(predict(
+                             mod0_DecMin, years,
+                             type = "response",
+                             se.fit = TRUE
+                           )))
+
+### Calculate upper and lower bounds
+DecMinPred <- transform(DecMinPred,
+                               upper = fit + (2 * se.fit),
+                               lower = fit - (2 * se.fit))
+
+#Extract first derivative of the trend
+Term = "water_year"
+m1.d <- Deriv(mod0_DecMin) #in theory gratia::derivatives should work here
+
+#Calculate confidence intervals around the first derivative
+m1.dci <- confint(m1.d, term = "water_year")
+
+#Extract periods of increasing or decreasing trends
+m1.dsig <- signifD(DecMinPred$fit,
+                   d = m1.d[[Term]]$deriv,
+                   m1.dci[[Term]]$upper,
+                   m1.dci[[Term]]$lower)
+
+#Plot the first derivative 
+plot.Deriv(m1.d)
+## Minimum Winter temps have been getting warmer in the last few decades!
+
+#Add a column for periods of time when the trend is accelerating
+DecMinPred <- cbind(DecMinPred, data.frame(incr=unlist(m1.dsig$incr)),
+                           data.frame(decr=unlist(m1.dsig$decr)))
+
+
+Fig4B <- DecMinPred %>%
+  ggplot(aes(x=water_year,y=fit))+
+  geom_point(data=yellowstone_full, aes(x=water_year, y=DecMin),
+             shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
+  geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
+  geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
+  labs(x="Year",y="Cumulative Dec. minimum temperature (°C)")+
+  coord_cartesian(xlim=c(1925,2025))+
+  scale_x_continuous(breaks=seq(1930, 2020, 15))+
+  # scale_y_continuous(breaks=seq(22,30,2))+
+  theme_pubr(base_size=8, border=TRUE)+
+  geom_text(data=panelLetter.normal,
+            aes(x=xpos,
+                y=ypos,
+                hjust=hjustvar,
+                vjust=vjustvar,
+                label="b",
+                fontface="bold"))
+
+Fig4B
+
+
+# >>>> Panel C - Cumul Jan min --------------------------------------------
+
+
+mod0_JanMin <- gam(JanMin ~ s(water_year),
+                   # family=Gamma(link="log"),
+                   data = yellowstone_full,
+                   correlation = corARMA(form = ~ 1 | water_year, p = 1), 
+                   #specifies the correlation argument of gam
+                   method = "REML")
+summary(mod0_JanMin)
+draw(mod0_JanMin)
+
+# acf(residuals(mod0_JanMin), lag.max = 10, plot = TRUE, main = "ACF of Residuals")
+#Lag 1 temporal autocorrelation
+
+
+#Test for a change in the rate of change using 1st derivatives
+#Extract years for next step
+years <- with(yellowstone_full, data.frame(water_year = seq(min(water_year, na.rm=TRUE),
+                                                            max(water_year, na.rm=TRUE),
+                                                            length.out = 200)))
+
+#Create a dataframe with predicted ("fitted") values from the GAM and water_year, on the response scale.
+JanMinPred <- cbind(years,
+                    data.frame(predict(
+                      mod0_JanMin, years,
+                      type = "response",
+                      se.fit = TRUE
+                    )))
+
+### Calculate upper and lower bounds
+JanMinPred <- transform(JanMinPred,
+                        upper = fit + (2 * se.fit),
+                        lower = fit - (2 * se.fit))
+
+#Extract first derivative of the trend
+Term = "water_year"
+m1.d <- Deriv(mod0_JanMin) #in theory gratia::derivatives should work here
+
+#Calculate confidence intervals around the first derivative
+m1.dci <- confint(m1.d, term = "water_year")
+
+#Extract periods of increasing or Janreasing trends
+m1.dsig <- signifD(JanMinPred$fit,
+                   d = m1.d[[Term]]$deriv,
+                   m1.dci[[Term]]$upper,
+                   m1.dci[[Term]]$lower)
+
+#Plot the first derivative 
+plot.Deriv(m1.d)
+## Minimum Winter temps have been getting warmer in the last few Janades!
+
+#Add a column for periods of time when the trend is accelerating
+JanMinPred <- cbind(JanMinPred, data.frame(incr=unlist(m1.dsig$incr)),
+                    data.frame(decr=unlist(m1.dsig$decr)))
+
+
+Fig4C <- JanMinPred %>%
+  ggplot(aes(x=water_year,y=fit))+
+  geom_point(data=yellowstone_full, aes(x=water_year, y=JanMin),
+             shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
+  geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
+  geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
+  labs(x="Year",y="Cumulative Jan. minimum temperature (°C)")+
+  coord_cartesian(xlim=c(1925,2025))+
+  scale_x_continuous(breaks=seq(1930, 2020, 15))+
+  # scale_y_continuous(breaks=seq(22,30,2))+
+  theme_pubr(base_size=8, border=TRUE)+
+  geom_text(data=panelLetter.normal,
+            aes(x=xpos,
+                y=ypos,
+                hjust=hjustvar,
+                vjust=vjustvar,
+                label="c",
+                fontface="bold"))
+
+Fig4C
+
+
+# >>>> Panel D - Cumul Apr max --------------------------------------------
+
+
+mod0_AprMax <- gam(AprMax ~ s(water_year),
+                   # family=Gamma(link="log"),
+                   data = yellowstone_full,
+                   correlation = corARMA(form = ~ 1 | water_year, p = 1), 
+                   #specifies the correlation argument of gam
+                   method = "REML")
+summary(mod0_AprMax)
+draw(mod0_AprMax)
+
+# acf(residuals(mod0_AprMax), lag.max = 10, plot = TRUE, main = "ACF of Residuals")
+#Lag 1 temporal autocorrelation
+
+
+#Test for a change in the rate of change using 1st derivatives
+#Extract years for next step
+years <- with(yellowstone_full, data.frame(water_year = seq(min(water_year, na.rm=TRUE),
+                                                            max(water_year, na.rm=TRUE),
+                                                            length.out = 200)))
+
+#Create a dataframe with predicted ("fitted") values from the GAM and water_year, on the response scale.
+AprMaxPred <- cbind(years,
+                    data.frame(predict(
+                      mod0_AprMax, years,
+                      type = "response",
+                      se.fit = TRUE
+                    )))
+
+### Calculate upper and lower bounds
+AprMaxPred <- transform(AprMaxPred,
+                        upper = fit + (2 * se.fit),
+                        lower = fit - (2 * se.fit))
+
+#Extract first derivative of the trend
+Term = "water_year"
+m1.d <- Deriv(mod0_AprMax) #in theory gratia::derivatives should work here
+
+#Calculate confidence intervals around the first derivative
+m1.dci <- confint(m1.d, term = "water_year")
+
+#Extract periods of increasing or Janreasing trends
+m1.dsig <- signifD(AprMaxPred$fit,
+                   d = m1.d[[Term]]$deriv,
+                   m1.dci[[Term]]$upper,
+                   m1.dci[[Term]]$lower)
+
+#Plot the first derivative 
+plot.Deriv(m1.d)
+## Minimum Winter temps have been getting warmer in the last few Janades!
+
+#Add a column for periods of time when the trend is accelerating
+AprMaxPred <- cbind(AprMaxPred, data.frame(incr=unlist(m1.dsig$incr)),
+                    data.frame(decr=unlist(m1.dsig$decr)))
+
+
+Fig4D <- AprMaxPred %>%
+  ggplot(aes(x=water_year,y=fit))+
+  geom_point(data=yellowstone_full, aes(x=water_year, y=AprMax),
+             shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
+  # geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
+  # geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
+  labs(x="Year",y="Cumulative April maximum temperature (°C)")+
+  coord_cartesian(xlim=c(1925,2025))+
+  scale_x_continuous(breaks=seq(1930, 2020, 15))+
+  # scale_y_continuous(breaks=seq(22,30,2))+
+  theme_pubr(base_size=8, border=TRUE)+
+  geom_text(data=panelLetter.normal,
+            aes(x=xpos,
+                y=ypos,
+                hjust=hjustvar,
+                vjust=vjustvar,
+                label="d",
+                fontface="bold"))
+
+Fig4D
+
+
+
+# >>>> Panel E - Cumul Spring temp ----------------------------------------
+
+mod0_SpringTempSum <- gam(SpringTempSum ~ s(water_year),
+                          # family=Gamma(link="log"),
+                          data = yellowstone_full,
+                          correlation = corARMA(form = ~ 1 | water_year, p = 1),
+                          #specifies the correlation argument of gam
+                          method = "REML")
+summary(mod0_SpringTempSum)
+draw(mod0_SpringTempSum)
+
+# acf(residuals(mod0_MaxSpringTemp), lag.max = 10, plot = TRUE, main = "ACF of Residuals")
+#Lag 1 temporal autocorrelation
+
+
+#Test for a change in the rate of change using 1st derivatives
+#Extract years for next step
+years <- with(yellowstone_full, data.frame(water_year = seq(min(water_year, na.rm=TRUE),
+                                                            max(water_year, na.rm=TRUE),
+                                                            length.out = 200)))
+
+#Create a dataframe with predicted ("fitted") values from the GAM and water_year, on the response scale.
+SumSpringTempPred <- cbind(years,
+                           data.frame(predict(
+                             mod0_SpringTempSum, years,
+                             type = "response",
+                             se.fit = TRUE
+                           )))
+
+### Calculate upper and lower bounds
+SumSpringTempPred <- transform(SumSpringTempPred,
+                               upper = fit + (2 * se.fit),
+                               lower = fit - (2 * se.fit))
+
+#Extract first derivative of the trend
+Term = "water_year"
+m1.d <- Deriv(mod0_SpringTempSum) #in theory gratia::derivatives should work here
+
+#Calculate confidence intervals around the first derivative
+m1.dci <- confint(m1.d, term = "water_year")
+
+#Extract periods of increasing or decreasing trends
+m1.dsig <- signifD(SumSpringTempPred$fit,
+                   d = m1.d[[Term]]$deriv,
+                   m1.dci[[Term]]$upper,
+                   m1.dci[[Term]]$lower)
+
+#Plot the first derivative
+plot.Deriv(m1.d)
+## Maximum Spring temps have been getting warmer in the last few decades!
+
+#Add a column for periods of time when the trend is accelerating
+SumSpringTempPred <- cbind(SumSpringTempPred, data.frame(incr=unlist(m1.dsig$incr)),
+                           data.frame(decr=unlist(m1.dsig$decr)))
+
+
+Fig4E <- SumSpringTempPred %>%
+  ggplot(aes(x=water_year,y=fit))+
+  geom_point(data=yellowstone_full, aes(x=water_year, y=SpringTempSum),
+             shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
+  geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
+  geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
+  labs(x="Year",y="Cumulative spring mean temperatures (°C)")+
+  coord_cartesian(xlim=c(1925,2025))+
+  scale_x_continuous(breaks=seq(1930, 2020, 15))+
+  theme_pubr(base_size=8, border=TRUE)+
+  geom_text(data=panelLetter.normal,
+            aes(x=xpos,
+                y=ypos,
+                hjust=hjustvar,
+                vjust=vjustvar,
+                label="e",
+                fontface="bold"))
+
+Fig4E
+
+
+
+# >>>> Panel F - Cumul May min --------------------------------------------
+
+
+mod0_MayMin <- gam(MayMin ~ s(water_year),
+                   # family=Gamma(link="log"),
+                   data = yellowstone_full,
+                   correlation = corARMA(form = ~ 1 | water_year, p = 1), 
+                   #specifies the correlation argument of gam
+                   method = "REML")
+summary(mod0_MayMin)
+draw(mod0_MayMin)
+
+# acf(residuals(mod0_MayMin), lag.max = 10, plot = TRUE, main = "ACF of Residuals")
+#Lag 1 temporal autocorrelation
+
+
+#Test for a change in the rate of change using 1st derivatives
+#Extract years for next step
+years <- with(yellowstone_full, data.frame(water_year = seq(min(water_year, na.rm=TRUE),
+                                                            max(water_year, na.rm=TRUE),
+                                                            length.out = 200)))
+
+#Create a dataframe with predicted ("fitted") values from the GAM and water_year, on the response scale.
+MayMinPred <- cbind(years,
+                    data.frame(predict(
+                      mod0_MayMin, years,
+                      type = "response",
+                      se.fit = TRUE
+                    )))
+
+### Calculate upper and lower bounds
+MayMinPred <- transform(MayMinPred,
+                        upper = fit + (2 * se.fit),
+                        lower = fit - (2 * se.fit))
+
+#Extract first derivative of the trend
+Term = "water_year"
+m1.d <- Deriv(mod0_MayMin) #in theory gratia::derivatives should work here
+
+#Calculate confidence intervals around the first derivative
+m1.dci <- confint(m1.d, term = "water_year")
+
+#Extract periods of increasing or Mayreasing trends
+m1.dsig <- signifD(MayMinPred$fit,
+                   d = m1.d[[Term]]$deriv,
+                   m1.dci[[Term]]$upper,
+                   m1.dci[[Term]]$lower)
+
+#Plot the first derivative 
+plot.Deriv(m1.d)
+## Minimum Winter temps have been getting warmer in the last few Mayades!
+
+#Add a column for periods of time when the trend is accelerating
+MayMinPred <- cbind(MayMinPred, data.frame(incr=unlist(m1.dsig$incr)),
+                    data.frame(decr=unlist(m1.dsig$decr)))
+
+
+Fig4F <- MayMinPred %>%
+  ggplot(aes(x=water_year,y=fit))+
+  geom_point(data=yellowstone_full, aes(x=water_year, y=MayMin),
+             shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
+  geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
+  geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
+  labs(x="Year",y="Cumulative May minimum temperature (°C)")+
+  coord_cartesian(xlim=c(1925,2025))+
+  scale_x_continuous(breaks=seq(1930, 2020, 15))+
+  # scale_y_continuous(breaks=seq(22,30,2))+
+  theme_pubr(base_size=8, border=TRUE)+
+  geom_text(data=panelLetter.normal,
+            aes(x=xpos,
+                y=ypos,
+                hjust=hjustvar,
+                vjust=vjustvar,
+                label="f",
+                fontface="bold"))
+
+Fig4F
+
+
+# >>>> Panel G - Cumul Spring snow ----------------------------------------
+
+
+mod0_cumulSpringSnow <- gam(SpringSnow ~ s(water_year),
+                            # family=Gamma(link="log"),
+                            data = yellowstone_full,
+                            # correlation = corCAR1(form = ~ Year),
+                            method = "REML")
+summary(mod0_cumulSpringSnow)
+draw(mod0_cumulSpringSnow)
+
+# acf(residuals(mod0_cumulSpringSnow), lag.max = 10, plot = TRUE, main = "ACF of Residuals")
+#No temporal autocorrelation
+
+
+#Test for a change in the rate of change using 1st derivatives
+#Extract years for next step
+years <- with(yellowstone_full, data.frame(water_year = seq(min(water_year, na.rm=TRUE),
+                                                            max(water_year, na.rm=TRUE),
+                                                            length.out = 200)))
+
+#Create a dataframe with predicted ("fitted") values from the GAM and water_year, on the response scale.
+cumulSpringSnowPred <- cbind(years,
+                             data.frame(predict(
+                               mod0_cumulSpringSnow, years,
+                               type = "response",
+                               se.fit = TRUE
+                             )))
+
+### Calculate upper and lower bounds
+cumulSpringSnowPred <- transform(cumulSpringSnowPred,
+                                 upper = fit + (2 * se.fit),
+                                 lower = fit - (2 * se.fit))
+
+#Extract first derivative of the trend
+Term = "water_year"
+m1.d <- Deriv(mod0_cumulSpringSnow) #in theory gratia::derivatives should work here
+
+#Calculate confidence intervals around the first derivative
+m1.dci <- confint(m1.d, term = "water_year")
+
+#Extract periods of increasing or decreasing trends
+m1.dsig <- signifD(cumulSpringSnowPred$fit,
+                   d = m1.d[[Term]]$deriv,
+                   m1.dci[[Term]]$upper,
+                   m1.dci[[Term]]$lower)
+
+#Plot the first derivative 
+plot.Deriv(m1.d)
+
+#Add a column for periods of time when the trend is accelerating
+cumulSpringSnowPred <- cbind(cumulSpringSnowPred, data.frame(incr=unlist(m1.dsig$incr)),
+                             data.frame(decr=unlist(m1.dsig$decr)))
+
+
+Fig4G <- cumulSpringSnowPred %>%
+  ggplot(aes(x=water_year,y=fit))+
+  geom_point(data=yellowstone_full, aes(x=water_year, y=SpringSnow),
+             shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
+  geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
+  geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
+  labs(x="Year",y="Cumulative spring snow (mm)")+
+  coord_cartesian(xlim=c(1925,2025))+
+  scale_x_continuous(breaks=seq(1930, 2020, 15))+
+  # scale_y_continuous(breaks=seq(22,30,2))+
+  theme_pubr(base_size=8, border=TRUE)+
+  geom_text(data=panelLetter.normal,
+            aes(x=xpos,
+                y=ypos,
+                hjust=hjustvar,
+                vjust=vjustvar,
+                label="g",
+                fontface="bold"))
+
+Fig4G
+
+# ........>> COMPILE FIGURE 4 <<........ ----------------------------------------------------------------
+##Vertically aligned
+Fig4A_vert <- Fig4A +
+  theme(plot.margin=unit(c(0,0.1,0,0.5), "lines"),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank())+
+  labs(title="Ice-on")
+Fig4B_vert <- Fig4B +
+  theme(plot.margin=unit(c(0,0.1,0,0.5), "lines"),
+        axis.ticks.y=element_line(),
+        axis.ticks.length.y = unit(0.1, "cm"),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank())
+Fig4C_vert <- Fig4C +
+  theme(plot.margin=unit(c(0,0.1,0,0.5), "lines"),
+        axis.ticks.y=element_line(),
+        axis.ticks.length.y = unit(0.1, "cm"))
+
+Fig4D_vert <- Fig4D +
+  theme(plot.margin=unit(c(0,0.1,0,0.5), "lines"),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank())+
+  labs(title="Ice-off")
+Fig4E_vert <- Fig4E +
+  theme(plot.margin=unit(c(0,0.1,0,0.5), "lines"),
+        axis.ticks.y=element_line(),
+        axis.ticks.length.y = unit(0.1, "cm"),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank())
+Fig4F_vert <- Fig4F +
+  theme(plot.margin=unit(c(0,0.1,0,0.5), "lines"),
+        axis.ticks.y=element_line(),
+        axis.ticks.length.y = unit(0.1, "cm"),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank())
+Fig4G_vert <- Fig4G +
+  theme(plot.margin=unit(c(0,0.1,0,0.5), "lines"),
+        axis.ticks.y=element_line(),
+        axis.ticks.length.y = unit(0.1, "cm"))
+
+combined <- (Fig4A_vert+ #a
+               Fig4D_vert+ #d
+               Fig4B_vert+ #b
+               Fig4E_vert+ #e
+               Fig4C_vert+ #c
+               Fig4F_vert+
+               patchwork::plot_spacer()+ #place legend in plot space
+               Fig4G_vert) & #f
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.text = element_text(size=8))
+
+combined <- combined  +
+  patchwork::plot_layout(ncol = 2, guides="collect")
+
+combined
+
+
+left_panel <- (Fig4A_vert+ #a
+  Fig4B_vert+ #b
+  Fig4C_vert+ #c
+  patchwork::plot_spacer()) +
+  patchwork::plot_layout(nrow=4) & 
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.text = element_text(size=8))
+
+right_panel <- (Fig4D_vert+ #a
+                 Fig4E_vert+ #b
+                 Fig4F_vert+ #c
+                Fig4G_vert) +
+  patchwork::plot_layout(nrow=4) & 
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.text = element_text(size=8))
+
+combined <- left_panel | right_panel
+
+ggsave("Figures/MS/Figure4_TrendInCovariates.pdf", width=8, height=10,units="in", dpi=600)
+ggsave("Figures/MS/Figure4_TrendInCovariates.png", width=8, height=10,units="in", dpi=600)
 
 
 # ~ MODELS - ICE DURATION----------------------------------------------------------------
