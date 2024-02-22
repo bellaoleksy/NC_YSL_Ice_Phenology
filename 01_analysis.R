@@ -25,8 +25,8 @@ rename <- dplyr::rename
 #Ice On
 
 # Timing<-read.csv(file="Data/R/YSL_Ice.csv",header=T,sep=",")
-Timing<-read.csv(file="Data/R/YSL_ice_phenology_20240220.csv",header=T,sep=",")
-Weather<-read.csv(file="Data/R/Yellowstone_Snow_Rain.csv",header=T,sep=",")
+Timing<-read.csv(file="Data/YSL_ice_phenology_20240220.csv",header=T,sep=",")
+Weather<-read.csv(file="Data/Yellowstone_Snow_Rain.csv",header=T,sep=",")
 
 #OLD -- STILL WORKS IF YOU UPLOAD YSL_Ice.csv
 # yellowstone_on <- Timing %>%
