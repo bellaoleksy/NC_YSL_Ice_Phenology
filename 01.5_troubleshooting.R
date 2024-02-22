@@ -24,47 +24,69 @@ rename <- dplyr::rename
 
 #Ice On
 
-Timing<-read.csv(file="Data/R/YSL_Ice.csv",header=T,sep=",")
+# Timing<-read.csv(file="Data/R/YSL_Ice.csv",header=T,sep=",")
+Timing<-read.csv(file="Data/R/YSL_ice_phenology_20240220.csv",header=T,sep=",")
 Weather<-read.csv(file="Data/R/Yellowstone_Snow_Rain.csv",header=T,sep=",")
 
-yellowstone_on <- Timing %>%
-  select(Year, IceOnDate, IceOnJulian) %>%
-  mutate(IceOnJulian = case_when(IceOnJulian > 365 ~ IceOnJulian - 365,
-                                 TRUE ~ IceOnJulian),
-         IceOnDate = ymd(parse_date_time(paste(Year, IceOnJulian), orders = "yj")),
-         water_year = calcWaterYear(IceOnDate)) %>%
-  rename(Year_on = Year) %>%
-  group_by(water_year) %>%
-  slice(which.max(IceOnDate))
+#OLD -- STILL WORKS IF YOU UPLOAD YSL_Ice.csv
+# yellowstone_on <- Timing %>%
+#   select(Year, IceOnDate, IceOnJulian) %>%
+#   mutate(IceOnJulian = case_when(IceOnJulian > 365 ~ IceOnJulian - 365,
+#                                  TRUE ~ IceOnJulian),
+#          IceOnDate = ymd(parse_date_time(paste(Year, IceOnJulian), orders = "yj")),
+#          water_year = calcWaterYear(IceOnDate)) %>%
+#   rename(Year_on = Year) %>%
+#   group_by(water_year) %>%
+#   slice(which.max(IceOnDate))
 
 #Ice off
-yellowstone_off <- Timing %>%
-  select(Year, IceOffDate, IceOffJulian) %>%
-  mutate(IceOffDate = ymd(parse_date_time(paste(Year, IceOffJulian), orders = "yj")),
-         water_year = calcWaterYear(IceOffDate)) %>%
-  dplyr::rename(Year_off = Year)
+# yellowstone_off <- Timing %>%
+#   select(Year, IceOffDate, IceOffJulian) %>%
+#   mutate(IceOffDate = ymd(parse_date_time(paste(Year, IceOffJulian), orders = "yj")),
+#          water_year = calcWaterYear(IceOffDate)) %>%
+#   dplyr::rename(Year_off = Year)
 
 #Combine for full phenology
-yellowstone_phenology <- full_join(yellowstone_off, 
-                                   yellowstone_on) %>%
-  mutate(j_on_wy = hydro.day(IceOnDate),
+# yellowstone_phenology <- full_join(yellowstone_off,
+#                                    yellowstone_on) %>%
+# mutate(j_on_wy = hydro.day(IceOnDate),
+#        j_off_wy = hydro.day(IceOffDate),
+#        ice_days = j_off_wy - j_on_wy)
+
+yellowstone_phenology <- Timing %>%
+  mutate(IceOnDate = ymd(CY_IceOn),
+         IceOffDate = ymd(CY_IceOff),
+         j_on_wy = hydro.day(IceOnDate),
          j_off_wy = hydro.day(IceOffDate),
          ice_days = j_off_wy - j_on_wy)
+
+
+
+# Summary statistics -------------------------------------------------------
+
 
 min(yellowstone_phenology$ice_days, na.rm=TRUE)
 max(yellowstone_phenology$ice_days, na.rm=TRUE)
 median(yellowstone_phenology$ice_days, na.rm=TRUE)
+mean(yellowstone_phenology$ice_days, na.rm=TRUE)
 
-min(yellowstone_phenology$j_on_wy, na.rm=TRUE) # december 2
+
+min(yellowstone_phenology$j_on_wy, na.rm=TRUE) # 275 + 62 = december 2
 max(yellowstone_phenology$j_on_wy, na.rm=TRUE) # january 28
-median(yellowstone_phenology$j_on_wy, na.rm=TRUE) #december 26
+median(yellowstone_phenology$j_on_wy, na.rm=TRUE) #275 + 87 december 27
 
-min(yellowstone_phenology$IceOffDate, na.rm=TRUE) 
-max(yellowstone_phenology$IceOffDate, na.rm=TRUE) 
-median(yellowstone_phenology$IceOffJulian, na.rm=TRUE) #may 2024
+min(yellowstone_phenology$j_off_wy, na.rm=TRUE) #DOY 120 April 29th
+max(yellowstone_phenology$j_off_wy, na.rm=TRUE) #DOY 165 June 13th 
+median(yellowstone_phenology$j_off_wy, na.rm=TRUE) #DOY 145 May 24th 
 
-
-
+#How many observations of ice on?
+colSums(!is.na(yellowstone_phenology))
+#IceOn = 74
+#IceOff = 84
+# Perc IceOn missing is
+(96-74)/96
+# Perc IceOff missing is
+(96-84)/96
 
 #Annual weather by water-year
 
@@ -245,7 +267,7 @@ yellowstone_full <- yellowstone_full %>% naniar::replace_with_na_all(condition =
 
 
 
-# CORR - ICE ON -----------------------------------------------------------
+# Correlations with climate variables -----------------------------------------------------------
 
 # Have to narrow down our candidate variables before modeling.
 # Anything spurious? Colinear?
@@ -297,8 +319,8 @@ IceOnVars <- YSL_ice_correlations_trim %>%
   arrange(row) %>%
   filter(row=="j_on_wy") %>%
   filter(!grepl('Feb|Spring|Jun|j_off_wy|ice_days|Depth', column)) %>%
-  filter(!column %in% c("FallSnow", #corr with Nov Snow
-                        "WinterMin")) %>% #corr w/ winterMin
+  filter(!column %in% c("FallMax", #corr with OctTempSum, FallTempSum
+                        "NovTempSum")) %>% #corr w/ FallTempSum
   arrange(p) %>%
   pull(column)
 
@@ -309,16 +331,23 @@ IceOffVars_full <- YSL_ice_correlations_trim %>%
   arrange(row) %>%
   filter(row=="j_off_wy") %>%
   filter(!grepl('Jun|Nov|ice_days', column)) %>%  #spurious likely relationships
-  arrange(desc(abs(cor)))
+  arrange(p) %>%
+  pull(column)
 
 #We need to narrow down the IceOffVars. How many are collinear? 
 YSL_collinear_trim %>% 
-  filter(row %in% IceOffVars) %>%
+  filter(row %in% IceOffVars_full) %>%
   arrange(row)
 IceOffVars_full
 
 #Trim IceOffVars
-IceOffVars <- IceOffVars_full %>%
+
+IceOffVars <- YSL_ice_correlations_trim %>%
+  group_by(row) %>%
+  filter(p <= 0.05) %>% 
+  arrange(row) %>%
+  filter(row=="j_off_wy") %>%
+  filter(!grepl('Jun|Nov|ice_days', column)) %>%  #spurious likely relationships
   filter(!column %in% c("AprTempSum", #corr w AprMax
                         "SpringMax",#corr w MayTempSum
                         "SpringMin")) %>% #corr w SpringTempSum
@@ -339,6 +368,165 @@ IceDaysVars_full <- YSL_ice_correlations_trim %>%
 YSL_collinear_trim %>% 
   filter(row %in% IceDaysVars_full) %>%
   arrange(row)
+IceDaysVars_full
+
+
+
+# ~ COMPARATIVE LAKES ANALYSIS  ----------------------------------------------------
+
+
+## Non-Yellowstone lakes
+non_ysl <- read_csv(here::here("Data/other_phenology.txt"))
+
+non_ysl <- non_ysl %>%
+  # select necessary columns
+  select(lake, lakecode, start_year, iceOn, iceOff, orig_duration) %>% 
+  # filter out lakes: 
+  filter(lakecode == "JK25"| # Lake Haukivesi
+           lakecode == "JK02"| # Lake Kallavesi
+           lakecode == "GW369"| # Lake Kallsjön
+           lakecode == "JK03"| # Näsijärvi
+           lakecode == "JK05"| # Päijänne
+           lakecode == "JK40"| # Pielinen
+           lakecode == "NG1" # Lake Baikal
+  ) %>%
+  # below is jp original
+  # caluclate on and off julian dates for water year
+  mutate(j_on_wy = hydro.day(iceOn),
+         j_off_wy = hydro.day(iceOff)) %>%
+  # filter out data only from 1927 to 2022
+  filter(start_year >= 1927, start_year <=2022) %>%
+  mutate(ice_days = j_off_wy - j_on_wy)
+
+#modify YSL dataset for binding
+ysl_bind <- yellowstone_phenology %>%
+  mutate(start_year = water_year-1,
+         lake = "yellowstone") %>%
+  select(-contains(c("_MD","CY_")), -water_year) %>%
+  rename(iceOn=IceOnDate,
+         iceOff=IceOffDate)
+
+#modify YSL dataset for binding
+# ysl_ice <- YSLon %>%
+#   select(Year, IceOnDate, IceOnJulian, IceOffDate, IceOffJulian) %>%
+#   mutate(IceOnJulian_new = case_when(IceOnJulian > 365 ~ IceOnJulian - 365,
+#                                      TRUE ~ IceOnJulian)) %>%
+#   mutate(IceOn = ymd(parse_date_time(paste(Year, IceOnJulian_new), orders = "yj")),
+#          IceOff = ymd(parse_date_time(paste(Year, IceOffJulian), orders = "yj")),
+#          j_on_wy = hydro.day(IceOn),
+#          j_off_wy = hydro.day(IceOff),
+#          ice_days = j_off_wy - j_on_wy,
+#          start_year = Year,
+#          water_year = calcWaterYear(IceOn),
+#          lake = "yellowstone") %>% 
+#   select(-c(IceOnDate:IceOnJulian_new)) 
+
+
+
+str(ysl_bind)
+str(non_ysl)
+
+# combine data sets
+full_data <- bind_rows(non_ysl, ysl_bind) %>%
+  arrange(lake, start_year)
+
+
+#=.. GAMs all lakes ----------------------------------------------------------
+
+# for-loop fitting models
+lake_names <- full_data %>%
+  pull(lake) %>%
+  unique()
+
+# ice-on fits
+ice_on_list <- list()
+for (lake in 1:length(lake_names)){
+  lake_name = lake_names[lake]
+  response_mod <- gam_mod_fun(full_data, j_on_wy~s(start_year, k=3), lake_name)
+  ice_on_list[[lake]] <- response_mod
+}
+names(ice_on_list) <- lake_names
+
+# ice-off fits
+ice_off_list <- list()
+for (lake in 1:length(lake_names)){
+  lake_name = lake_names[lake]
+  response_mod <- gam_mod_fun(full_data, j_off_wy~s(start_year, k=3), lake_name)
+  ice_off_list[[lake]] <- response_mod
+}
+names(ice_off_list) <- lake_names
+
+# ice duration fits
+ice_days_list <- list()
+for (lake in 1:length(lake_names)){
+  lake_name = lake_names[lake]
+  response_mod <- gam_mod_fun(full_data, ice_days~s(start_year, k=3), lake_name)
+  ice_days_list[[lake]] <- response_mod
+}
+names(ice_days_list) <- lake_names
+
+# save list of response lists
+ice_response_list = list(duration = ice_days_list,
+                         off_date = ice_off_list,
+                         on_date = ice_on_list)
+
+# gam summaries
+# ice-on summary
+on_stats <- gam_summary(full_data, j_on_wy~s(start_year), lake) %>%
+  mutate(tidied = map(model, tidy)) %>%
+  select(tidied) %>%
+  unnest(tidied) %>%
+  mutate(phenology = "ice_on") 
+on_stats
+
+# ice-off summary
+off_stats <- gam_summary(full_data, j_off_wy~s(start_year), lake) %>%
+  mutate(tidied = map(model, tidy)) %>%
+  select(tidied) %>%
+  unnest(tidied) %>%
+  mutate(phenology = "ice_off") 
+off_stats
+# ice duration summary
+duration_stats <- gam_summary(full_data, ice_days~s(start_year), lake) %>%
+  mutate(tidied = map(model, tidy)) %>%
+  select(tidied) %>%
+  unnest(tidied) %>%
+  mutate(phenology = "ice_duration") 
+duration_stats
+
+# >>> write csv of gam summaries ####
+bind_rows(on_stats, off_stats, duration_stats) %>%
+  write_csv("Figures/MS/gam_stat_table.csv")
+
+
+
+
+# Figure 2 - all lakes ----------------------------------------------------
+
+hi_res <- full_data %>% 
+  select(lake, start_year, ice_days, j_on_wy, j_off_wy) %>%
+  pivot_longer(ice_days:j_off_wy) %>%
+  mutate(name = factor(name,
+                       levels=c("j_on_wy",
+                                "j_off_wy",
+                                "ice_days"))) %>%
+  ggplot(aes(x = start_year,
+             y = value)) +
+  geom_point(shape=21, fill="grey50", alpha=0.9) +
+  theme_bw() +
+  facet_grid(name ~ lake, scales = "free_y") +
+  geom_smooth(method = "gam", color="black", formula = y ~s(x, k=3)) + 
+  labs(y = "Day of water year") +
+  scale_x_continuous(breaks=c(1930,1960,1990,2020),
+                     limits=c(1930,2020))+
+  theme_pubr(border=TRUE, base_size=8)+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+hi_res
+
+ggsave(filename = here::here("Figures/MS/Figure2_full_fig_hi-res.pdf"),
+       plot = hi_res,
+       dpi = 600)
+
 
 # ~ MODELS - ICE ON ----------------------------------------------------------------
 
@@ -359,8 +547,8 @@ appraise(mod0_iceOn)
 ### Start with all fall variables that were highly correlated
 IceOnVars
 
-mod1_iceOn <- gam(j_on_wy ~ s(NovSnow) + s(DecMin) +
-                        s(WinterTempSum) + s(DecTempSum) + s(WinterMax)  + s(JanMin),
+mod1_iceOn <- gam(j_on_wy ~ s(FallTempSum) + s(OctTempSum) +
+                        s(OctMin) + s(FallMin) + s(DecMin)  + s(DecTempSum),
                   family=Gamma(link="log"),
                   data = yellowstone_full,
                   # correlation = corCAR1(form = ~ Year),
@@ -372,8 +560,8 @@ draw(mod1_iceOn)
 appraise(mod1_iceOn)
 # appraise(mod1_iceOn)
 
-mod2_iceOn <- gam(j_on_wy ~ s(NovSnow) + s(DecMin) + 
-                    s(DecTempSum) + s(WinterMax)  + s(JanMin),
+mod2_iceOn <- gam(j_on_wy ~  s(FallTempSum) + 
+                    s(OctMin) + s(FallMin) + s(DecMin)  + s(DecTempSum),
                       family=Gamma(link="log"),
                       data = yellowstone_full,
                       method = "REML")
@@ -382,8 +570,8 @@ draw(mod2_iceOn)
 appraise(mod2_iceOn)
 
 
-mod3_iceOn <- gam(j_on_wy ~  s(NovSnow) + s(DecMin) + 
-                     s(WinterMax)  + s(JanMin),
+mod3_iceOn <- gam(j_on_wy ~   s(FallTempSum) + 
+                    s(OctMin) + s(FallMin) + s(DecMin),
                       family=Gamma(link="log"),
                       data = yellowstone_full,
                       method = "REML")
@@ -391,8 +579,8 @@ summary(mod3_iceOn)
 draw(mod3_iceOn)
 appraise(mod3_iceOn)
 
-mod4_iceOn <- gam(j_on_wy ~   s(NovSnow) + s(DecMin) + 
-                     s(JanMin),
+mod4_iceOn <- gam(j_on_wy ~  s(FallTempSum) + 
+                     s(FallMin) + s(DecMin),
                       family=Gamma(link="log"),
                       data = yellowstone_full,
                       method = "REML")
@@ -401,7 +589,8 @@ draw(mod4_iceOn)
 appraise(mod4_iceOn)
 
 
-mod5_iceOn <- gam(j_on_wy ~   s(NovSnow) + s(DecMin),
+mod5_iceOn <- gam(j_on_wy ~   s(FallTempSum) + 
+                     s(DecMin),
                   family=Gamma(link="log"),
                   data = yellowstone_full,
                   method = "REML")
@@ -426,34 +615,34 @@ panelLetter.normal <- data.frame(
 
 summary(mod4_iceOn)
 
-# >>>> Panel A -- Ice On vs. Cumul. Nov. Snow --------------------------------------
+# >>>> Panel A -- Ice On vs. Cumul. Fall Temp--------------------------------------
 
 new_data <-
   with(yellowstone_full,
        expand.grid(
-         NovSnow = seq(
-           min(NovSnow, na.rm = TRUE),
-           max(NovSnow, na.rm =
+         FallTempSum = seq(
+           min(FallTempSum, na.rm = TRUE),
+           max(FallTempSum, na.rm =
                  TRUE),
            length = 200
          ),
          DecMin = median(DecMin, na.rm =
                              TRUE),
-         JanMin = median(JanMin, na.rm=TRUE)
+         FallMin = median(FallMin, na.rm=TRUE)
        ))
 
 ilink <- family(mod4_iceOn)$linkinv
-pred_NovSnow <- predict(mod4_iceOn, new_data, type = "link", se.fit = TRUE)
-pred_NovSnow <- cbind(pred_NovSnow, new_data)
-pred_NovSnow <- transform(pred_NovSnow, lwr_ci = ilink(fit - (2 * se.fit)),
+pred_FallTempSum <- predict(mod4_iceOn, new_data, type = "link", se.fit = TRUE)
+pred_FallTempSum <- cbind(pred_FallTempSum, new_data)
+pred_FallTempSum <- transform(pred_FallTempSum, lwr_ci = ilink(fit - (2 * se.fit)),
                           upr_ci = ilink(fit + (2 * se.fit)),
                           fitted = ilink(fit))
 
-pred_NovSnow <- pred_NovSnow %>%
-  select(NovSnow, lwr_ci:fitted) %>%
-  dplyr::rename(lwr_ci_NovSnow = lwr_ci,
-                upr_ci_NovSnow = upr_ci,
-                fitted_NovSnow = fitted)
+pred_FallTempSum <- pred_FallTempSum %>%
+  select(FallTempSum, lwr_ci:fitted) %>%
+  dplyr::rename(lwr_ci_FallTempSum = lwr_ci,
+                upr_ci_FallTempSum = upr_ci,
+                fitted_FallTempSum = fitted)
 
 #Modify axis labels: fed DOY -> dates
 breaks_IceOn<-c(60, 80, 100, 120)
@@ -461,14 +650,14 @@ breaks_IceOn<-c(60, 80, 100, 120)
 
 
 Fig3A <-
-  ggplot(pred_NovSnow, aes(x = NovSnow, y = fitted_NovSnow)) +
-  geom_ribbon(aes(ymin = lwr_ci_NovSnow, ymax = upr_ci_NovSnow), alpha = 0.2) +
+  ggplot(pred_FallTempSum, aes(x = FallTempSum, y = fitted_FallTempSum)) +
+  geom_ribbon(aes(ymin = lwr_ci_FallTempSum, ymax = upr_ci_FallTempSum), alpha = 0.2) +
   geom_line() +
-  geom_point(data=yellowstone_full, aes(x=NovSnow,
+  geom_point(data=yellowstone_full, aes(x=FallTempSum,
                              y=j_on_wy,
                              fill=water_year), 
              shape=21, alpha=0.9)+
-  labs(x="Cumulative Nov. Snow (mm)",
+  labs(x="Cumulative Fall Temperature (°C)",
        y="Ice-on date")+
   scale_y_continuous(breaks=breaks_IceOn,
                      labels=c("30-Nov","20-Dec","10-Jan","30-Jan"))+
@@ -499,9 +688,9 @@ new_data <-
                  TRUE),
            length = 200
          ),
-         NovSnow = median(NovSnow, na.rm =
+         FallTempSum = median(FallTempSum, na.rm =
                             TRUE),
-         JanMin = median(JanMin, na.rm=TRUE)
+         FallMin = median(FallMin, na.rm=TRUE)
        ))
 
 
@@ -553,48 +742,48 @@ Fig3B <-
 
 
 
-# # >>>>  Panel C -- Ice On vs. Cumul min Jan -------------------------------------
+# # >>>>  Panel C -- Ice On vs. Cumul Fall Min Temp -------------------------------------
 summary(mod4_iceOn)
 
 new_data <-
   with(yellowstone_full,
        expand.grid(
-         JanMin = seq(
-           min(JanMin, na.rm = TRUE),
-           max(JanMin, na.rm =
+         FallMin = seq(
+           min(FallMin, na.rm = TRUE),
+           max(FallMin, na.rm =
                  TRUE),
            length = 200
          ),
-         NovSnow = median(NovSnow, na.rm =
+         FallTempSum = median(FallTempSum, na.rm =
                              TRUE),
          DecMin = median(DecMin, na.rm=TRUE)
        ))
 
 ilink <- family(mod4_iceOn)$linkinv
-pred_JanMin <- predict(mod4_iceOn, new_data, type = "link", se.fit = TRUE)
-pred_JanMin <- cbind(pred_JanMin, new_data)
-pred_JanMin <- transform(pred_JanMin, lwr_ci = ilink(fit - (2 * se.fit)),
+pred_FallMin <- predict(mod4_iceOn, new_data, type = "link", se.fit = TRUE)
+pred_FallMin <- cbind(pred_FallMin, new_data)
+pred_FallMin <- transform(pred_FallMin, lwr_ci = ilink(fit - (2 * se.fit)),
                            upr_ci = ilink(fit + (2 * se.fit)),
                            fitted = ilink(fit))
-pred_JanMin <- pred_JanMin %>%
-  select(JanMin, lwr_ci:fitted) %>%
-  dplyr::rename(lwr_ci_JanMin = lwr_ci,
-                upr_ci_JanMin = upr_ci,
-                fitted_JanMin = fitted)
+pred_FallMin <- pred_FallMin %>%
+  select(FallMin, lwr_ci:fitted) %>%
+  dplyr::rename(lwr_ci_FallMin = lwr_ci,
+                upr_ci_FallMin = upr_ci,
+                fitted_FallMin = fitted)
 
 breaks_IceOn<-c(60, 80, 100, 120)
 # c("30-Nov","20-Dec","10-Jan","30-Jan") #corresponding cal dates
 
 
 Fig3C <-
-  ggplot(pred_JanMin, aes(x = JanMin, y = fitted_JanMin)) +
-  geom_ribbon(aes(ymin = lwr_ci_JanMin, ymax = upr_ci_JanMin), alpha = 0.2) +
+  ggplot(pred_FallMin, aes(x = FallMin, y = fitted_FallMin)) +
+  geom_ribbon(aes(ymin = lwr_ci_FallMin, ymax = upr_ci_FallMin), alpha = 0.2) +
   geom_line() +
-  geom_point(data=yellowstone_full, aes(x=JanMin,
+  geom_point(data=yellowstone_full, aes(x=FallMin,
                              y=j_on_wy,
                              fill=water_year), 
              shape=21,alpha=0.9)+
-  labs(x="Cumulative min. Jan. temperatures (°C)",
+  labs(x="Cumulative min. fall temperatures (°C)",
        y="Ice-on date")+
   scale_y_continuous(breaks=breaks_IceOn,
                      labels=c("30-Nov","20-Dec","10-Jan","30-Jan"))+
@@ -668,6 +857,8 @@ summary(mod1_iceOff)
 draw(mod1_iceOff)
 appraise(mod1_iceOff)
 
+gam.check(mod1_iceOff)
+
 #Mod 2
 mod2_iceOff <- gam(j_off_wy ~  s(AprMax) + s(SpringTempSum) + s(MayTempSum) +
                      s(MayMin) + s(SpringSnow) + s(AprMin),
@@ -691,15 +882,17 @@ draw(mod3_iceOff)
 appraise(mod3_iceOff)
 
 #Mod 4
-mod4_iceOff <- gam(j_off_wy ~  s(AprMax) + s(SpringTempSum) +
+mod4_iceOff <- gam(j_off_wy ~  s(AprMax) + 
+                     s(SpringTempSum) +
                      s(MayMin) + s(SpringSnow) ,
                        family=Gamma(link="log"),
                        data = yellowstone_full,
-                       # correlatiOff = corCAR1(form = ~ Year),
                        method = "REML")
 summary(mod4_iceOff)
 draw(mod4_iceOff)
 appraise(mod4_iceOff)
+
+gam.check(mod4_iceOff)
 
 #Mod 5
 mod5_iceOff <- gam(j_off_wy ~  s(AprMax) + s(SpringTempSum) +
@@ -1078,18 +1271,18 @@ ggsave("Figures/MS/Figure3_GAMS_IceOn_IceOff.png", width=6, height=8,units="in",
 # FIGURE 4  - trends in drivers ----------------------------------------------------------------
 
 
-# >>>> Panel A - Nov Snow -------------------------------------------------
+# >>>> Panel A - Cumul Fall Temp. -------------------------------------------------
 
 
-mod0_NovSnow <- gam(NovSnow ~ s(water_year) ,
+mod0_FallTempSum <- gam(FallTempSum ~ s(water_year) ,
                       # family=Gamma(link="log"),
                       data = yellowstone_full,
                       # correlation = corCAR1(form = ~ water_year),
                       method = "REML")
-summary(mod0_NovSnow)
-draw(mod0_NovSnow)
-# report(mod0_NovSnow)
-# acf(residuals(mod0_NovSnow), lag.max = 10, plot = TRUE, main = "ACF of Residuals")
+summary(mod0_FallTempSum)
+draw(mod0_FallTempSum)
+# report(mod0_FallTempSum)
+# acf(residuals(mod0_FallTempSum), lag.max = 10, plot = TRUE, main = "ACF of Residuals")
 #No temporal autocorrelation
 
 
@@ -1100,30 +1293,30 @@ years <- with(yellowstone_full, data.frame(water_year = seq(min(water_year, na.r
                                                             length.out = 200)))
 
 #Create a dataframe with predicted ("fitted") values from the GAM and water_year, on the response scale.
-NovSnowPred <- cbind(years,
+FallTempSumPred <- cbind(years,
                        data.frame(predict(
-                         mod0_NovSnow, years,
+                         mod0_FallTempSum, years,
                          type = "response",
                          se.fit = TRUE
                        )))
 
 ### Calculate upper and lower bounds
-NovSnowPred <- transform(NovSnowPred,
+FallTempSumPred <- transform(FallTempSumPred,
                            upper = fit + (2 * se.fit),
                            lower = fit - (2 * se.fit))
 
 #Extract first derivative of the trend
 Term = "water_year"
-m1.d <- Deriv(mod0_NovSnow) #in theory gratia::derivatives should work here
-m1.d.2 <- gratia::derivatives(mod0_NovSnow)
-m1.d.3 <- gratia::fderiv(mod0_NovSnow)
+m1.d <- Deriv(mod0_FallTempSum) #in theory gratia::derivatives should work here
+m1.d.2 <- gratia::derivatives(mod0_FallTempSum)
+m1.d.3 <- gratia::fderiv(mod0_FallTempSum)
 
 #Calculate confidence intervals around the first derivative
 m1.dci <- confint(m1.d, term = "water_year")
 
 
 #Extract periods of increasing or decreasing trends
-m1.dsig <- signifD(NovSnowPred$fit,
+m1.dsig <- signifD(FallTempSumPred$fit,
                    d = m1.d[[Term]]$deriv,
                    m1.dci[[Term]]$upper,
                    m1.dci[[Term]]$lower)
@@ -1133,19 +1326,19 @@ plot.Deriv(m1.d)
 ## Positive rate of change in cumulative snow both the early part of the record and late part of the record
 
 #Add a column for periods of time when the trend is accelerating
-NovSnowPred <- cbind(NovSnowPred, data.frame(incr=unlist(m1.dsig$incr)),
+FallTempSumPred <- cbind(FallTempSumPred, data.frame(incr=unlist(m1.dsig$incr)),
                        data.frame(decr=unlist(m1.dsig$decr)))
 
 
-Fig4A <- NovSnowPred %>%
+Fig4A <- FallTempSumPred %>%
   ggplot(aes(x=water_year,y=fit))+
-  geom_point(data=yellowstone_full, aes(x=water_year, y=NovSnow),
+  geom_point(data=yellowstone_full, aes(x=water_year, y=FallTempSum),
              shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
   # geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
   # geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
   # geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
   # geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
-  labs(x="Year",y="Cumulative November snow (mm)")+
+  labs(x="Year",y="Cumulative fall temperature (°C)")+
   coord_cartesian(xlim=c(1925,2025))+
   scale_x_continuous(breaks=seq(1930, 2020, 15))+
   # scale_y_continuous(breaks=seq(22,30,2))+
@@ -1223,8 +1416,8 @@ Fig4B <- DecMinPred %>%
   geom_point(data=yellowstone_full, aes(x=water_year, y=DecMin),
              shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
   geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
-  geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
-  geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  geom_line(aes(x=water_year, y=incr), color="red", linewidth=2, alpha=0.8)+ #Highlight period of increasing trend
+  geom_line(aes(x=water_year, y=decr), color="blue", linewidth=2, alpha=0.8)+ #Highlight period of increasing trend
   geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
   labs(x="Year",y="Cumulative Dec. minimum temperature (°C)")+
   coord_cartesian(xlim=c(1925,2025))+
@@ -1242,19 +1435,19 @@ Fig4B <- DecMinPred %>%
 Fig4B
 
 
-# >>>> Panel C - Cumul Jan min --------------------------------------------
+# >>>> Panel C - Cumul Fall Min Temp  --------------------------------------------
 
 
-mod0_JanMin <- gam(JanMin ~ s(water_year),
+mod0_FallMin <- gam(FallMin ~ s(water_year),
                    # family=Gamma(link="log"),
                    data = yellowstone_full,
                    correlation = corARMA(form = ~ 1 | water_year, p = 1), 
                    #specifies the correlation argument of gam
                    method = "REML")
-summary(mod0_JanMin)
-draw(mod0_JanMin)
+summary(mod0_FallMin)
+draw(mod0_FallMin)
 
-# acf(residuals(mod0_JanMin), lag.max = 10, plot = TRUE, main = "ACF of Residuals")
+# acf(residuals(mod0_FallMin), lag.max = 10, plot = TRUE, main = "ACF of Residuals")
 #Lag 1 temporal autocorrelation
 
 
@@ -1265,27 +1458,27 @@ years <- with(yellowstone_full, data.frame(water_year = seq(min(water_year, na.r
                                                             length.out = 200)))
 
 #Create a dataframe with predicted ("fitted") values from the GAM and water_year, on the response scale.
-JanMinPred <- cbind(years,
+FallMinPred <- cbind(years,
                     data.frame(predict(
-                      mod0_JanMin, years,
+                      mod0_FallMin, years,
                       type = "response",
                       se.fit = TRUE
                     )))
 
 ### Calculate upper and lower bounds
-JanMinPred <- transform(JanMinPred,
+FallMinPred <- transform(FallMinPred,
                         upper = fit + (2 * se.fit),
                         lower = fit - (2 * se.fit))
 
 #Extract first derivative of the trend
 Term = "water_year"
-m1.d <- Deriv(mod0_JanMin) #in theory gratia::derivatives should work here
+m1.d <- Deriv(mod0_FallMin) #in theory gratia::derivatives should work here
 
 #Calculate confidence intervals around the first derivative
 m1.dci <- confint(m1.d, term = "water_year")
 
 #Extract periods of increasing or Janreasing trends
-m1.dsig <- signifD(JanMinPred$fit,
+m1.dsig <- signifD(FallMinPred$fit,
                    d = m1.d[[Term]]$deriv,
                    m1.dci[[Term]]$upper,
                    m1.dci[[Term]]$lower)
@@ -1295,19 +1488,19 @@ plot.Deriv(m1.d)
 ## Minimum Winter temps have been getting warmer in the last few Janades!
 
 #Add a column for periods of time when the trend is accelerating
-JanMinPred <- cbind(JanMinPred, data.frame(incr=unlist(m1.dsig$incr)),
+FallMinPred <- cbind(FallMinPred, data.frame(incr=unlist(m1.dsig$incr)),
                     data.frame(decr=unlist(m1.dsig$decr)))
 
 
-Fig4C <- JanMinPred %>%
+Fig4C <- FallMinPred %>%
   ggplot(aes(x=water_year,y=fit))+
-  geom_point(data=yellowstone_full, aes(x=water_year, y=JanMin),
+  geom_point(data=yellowstone_full, aes(x=water_year, y=FallMin),
              shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
   geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
   geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
   geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
   geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
-  labs(x="Year",y="Cumulative Jan. minimum temperature (°C)")+
+  labs(x="Year",y="Cumulative fall minimum temperature (°C)")+
   coord_cartesian(xlim=c(1925,2025))+
   scale_x_continuous(breaks=seq(1930, 2020, 15))+
   # scale_y_continuous(breaks=seq(22,30,2))+
@@ -1718,6 +1911,7 @@ right_panel <- (Fig4D_vert+ #a
         legend.text = element_text(size=8))
 
 combined <- left_panel | right_panel
+combined
 
 ggsave("Figures/MS/Figure4_TrendInCovariates.pdf", width=8, height=10,units="in", dpi=600)
 ggsave("Figures/MS/Figure4_TrendInCovariates.png", width=8, height=10,units="in", dpi=600)
@@ -1736,8 +1930,8 @@ appraise(mod0_iceDur)
 
 IceDaysVars
 
-mod1_iceDur <- gam(ice_days ~ s(AprTempSum) + s(AprMax) + s(MayMin) +
-                     s(DecTempSum) + s(MayTempSum) ,
+mod1_iceDur <- gam(ice_days ~ s(FallTempSum) + s(DecTempSum) + s(DecMin) +
+                     s(SpringTempSum) + s(WinterMax) + s(MayMin) ,
                    family=Gamma(link="log"),
                    data = yellowstone_full,
                    # correlatiOff = corCAR1(form = ~ Year),
@@ -1746,8 +1940,8 @@ summary(mod1_iceDur)
 draw(mod1_iceDur)
 appraise(mod1_iceDur)
 
-mod2_iceDur <- gam(ice_days ~ s(AprMax) + s(MayMin) +
-                     s(DecTempSum) + s(MayTempSum) ,
+mod2_iceDur <- gam(ice_days ~ s(FallTempSum) + s(DecMin) +
+                     s(SpringTempSum) + s(WinterMax) + s(MayMin) ,
                    family=Gamma(link="log"),
                    data = yellowstone_full,
                    # correlatiOff = corCAR1(form = ~ Year),
@@ -1757,8 +1951,8 @@ draw(mod2_iceDur)
 appraise(mod2_iceDur)
 
 
-mod3_iceDur <- gam(ice_days ~ s(AprMax) + s(MayMin) +
-                     s(DecTempSum) ,
+mod3_iceDur <- gam(ice_days ~ s(FallTempSum) + s(DecMin) +
+                     s(SpringTempSum) + s(WinterMax),
                    family=Gamma(link="log"),
                    data = yellowstone_full,
                    # correlatiOff = corCAR1(form = ~ Year),
@@ -1768,8 +1962,8 @@ draw(mod3_iceDur)
 appraise(mod3_iceDur)
 
 
-mod4_iceDur <- gam(ice_days ~ s(AprMax) + s(MayMin) +
-                     s(DecTempSum) + s(MayTempSum) + s(SpringSnow),
+mod4_iceDur <- gam(ice_days ~ s(FallTempSum) + s(DecMin) +
+                     s(SpringTempSum),
                    family=Gamma(link="log"),
                    data = yellowstone_full,
                    # correlatiOff = corCAR1(form = ~ Year),
@@ -1778,19 +1972,6 @@ summary(mod4_iceDur)
 draw(mod4_iceDur)
 appraise(mod4_iceDur)
 
-mod5_iceDur <- gam(ice_days ~ s(AprMax) + s(MayMin) +
-                     s(DecTempSum) + s(SpringSnow),
-                   family=Gamma(link="log"),
-                   data = yellowstone_full,
-                   # correlatiOff = corCAR1(form = ~ Year),
-                   method = "REML")
-summary(mod5_iceDur)
-draw(mod5_iceDur)
-appraise(mod5_iceDur)
-
-compareML(mod2_iceDur, mod3_iceDur) #mod2 wins
-compareML(mod2_iceDur, mod4_iceDur) #mod4 wins!
-compareML(mod5_iceDur, mod4_iceDur) #mod4 wins!
 
 
 # Export Table Ice On Models ----------------------------------------------
@@ -1799,8 +1980,7 @@ models <- list(
   mod1_iceDur,
   mod2_iceDur,
   mod3_iceDur,
-  mod4_iceDur,
-  mod5_iceDur
+  mod4_iceDur
 )
 
 compile_gam_outputs <- function(models) {
@@ -1824,6 +2004,7 @@ compiled_outputs_iceon <- compile_gam_outputs(models) %>%
 # * -----------------------------------------------------------------------
 # * -----------------------------------------------------------------------
 # * -----------------------------------------------------------------------
+
 
 # Discussion points -------------------------------------------------------
 
