@@ -25,8 +25,8 @@ rename <- dplyr::rename
 #Ice On
 
 # Timing<-read.csv(file="Data/R/YSL_Ice.csv",header=T,sep=",")
-Timing<-read.csv(file="Data/YSL_ice_phenology_20240220.csv",header=T,sep=",")
-Weather<-read.csv(file="Data/Yellowstone_Snow_Rain.csv",header=T,sep=",")
+Timing<-read.csv(file="data/YSL_ice_phenology_20240220.csv",header=T,sep=",")
+Weather<-read.csv(file="data/Yellowstone_Snow_Rain.csv",header=T,sep=",")
 
 #OLD -- STILL WORKS IF YOU UPLOAD YSL_Ice.csv
 # yellowstone_on <- Timing %>%
@@ -376,7 +376,7 @@ IceDaysVars_full
 
 
 ## Non-Yellowstone lakes
-non_ysl <- read_csv(here::here("Data/other_phenology.txt"))
+non_ysl <- read_csv(here::here("data/other_phenology.txt"))
 
 non_ysl <- non_ysl %>%
   # select necessary columns
