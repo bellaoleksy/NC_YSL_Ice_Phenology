@@ -4,7 +4,8 @@
 .httr-oauth
 .DS_Store
 .Rbuildignore
-scripts/
-LiteratureReview/
-Manuscript/
+/scripts
+/LiteratureReview
+/Manuscript
 /archive
+/Data
