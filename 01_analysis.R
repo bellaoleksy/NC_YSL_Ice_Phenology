@@ -24,34 +24,8 @@ rename <- dplyr::rename
 
 #Ice On
 
-# Timing<-read.csv(file="Data/R/YSL_Ice.csv",header=T,sep=",")
 Timing<-read.csv(file="data/YSL_ice_phenology_20240220.csv",header=T,sep=",")
 Weather<-read.csv(file="data/Yellowstone_Snow_Rain.csv",header=T,sep=",")
-
-#OLD -- STILL WORKS IF YOU UPLOAD YSL_Ice.csv
-# yellowstone_on <- Timing %>%
-#   select(Year, IceOnDate, IceOnJulian) %>%
-#   mutate(IceOnJulian = case_when(IceOnJulian > 365 ~ IceOnJulian - 365,
-#                                  TRUE ~ IceOnJulian),
-#          IceOnDate = ymd(parse_date_time(paste(Year, IceOnJulian), orders = "yj")),
-#          water_year = calcWaterYear(IceOnDate)) %>%
-#   rename(Year_on = Year) %>%
-#   group_by(water_year) %>%
-#   slice(which.max(IceOnDate))
-
-#Ice off
-# yellowstone_off <- Timing %>%
-#   select(Year, IceOffDate, IceOffJulian) %>%
-#   mutate(IceOffDate = ymd(parse_date_time(paste(Year, IceOffJulian), orders = "yj")),
-#          water_year = calcWaterYear(IceOffDate)) %>%
-#   dplyr::rename(Year_off = Year)
-
-#Combine for full phenology
-# yellowstone_phenology <- full_join(yellowstone_off,
-#                                    yellowstone_on) %>%
-# mutate(j_on_wy = hydro.day(IceOnDate),
-#        j_off_wy = hydro.day(IceOffDate),
-#        ice_days = j_off_wy - j_on_wy)
 
 yellowstone_phenology <- Timing %>%
   mutate(IceOnDate = ymd(CY_IceOn),
@@ -97,56 +71,6 @@ sum2 <- function(x) {
       sum(x,na.rm = TRUE)}
 }
 
-
-
-#Need to know how many water-years are have no data for certain variables
-# wx_QAQC <- Weather %>%
-#   mutate(
-#     Date = mdy(Date),
-#     year = year(Date),
-#     month = month(Date),
-#     month_name = month(Date, label = TRUE),
-#     water_year = dataRetrieval::calcWaterYear(Date)) %>%
-#   select(-SnowDepth.mm,
-#          -contains(".F"),
-#          -contains(".in")) %>%
-#   pivot_longer(max.C:snow.mm) %>%
-#   group_by(water_year, name, month) %>% 
-#   summarise_all(~sum(is.na(.))) %>%
-#   filter(value > 15) %>%
-#   select(water_year, name, month, value) %>%
-#   pivot_wider(names_from = name,
-#               values_from = value)
-# # Filter OUT all the year-months where over half the days are missing Wx data
-# 
-# rain.mm_filtered <- Weather %>%
-#   mutate(
-#     Date = mdy(Date),
-#     year = year(Date),
-#     month = month(Date),
-#     month_name = month(Date, label = TRUE),
-#     water_year = dataRetrieval::calcWaterYear(Date)) %>%
-#   select(Date, month:water_year, rain.mm) %>%
-#   filter(water_year %in% wx_QAQC$water_year &
-#            month %in% wx_QAQC$month)
-# 
-# snow.mm_filtered <- Weather %>%
-#   mutate(
-#     Date = mdy(Date),
-#     year = year(Date),
-#     month = month(Date),
-#     month_name = month(Date, label = TRUE),
-#     water_year = dataRetrieval::calcWaterYear(Date)) %>%
-#   select(Date, month:water_year, snow.mm) %>%
-#   filter(water_year %in% wx_QAQC$water_year &
-#            month %in% wx_QAQC$month)
-# 
-#            # rain.mm %in% wx_QAQC$rain.mm &
-#            # max.C %in% wx_QAQC$max.C &
-#            # mean.C %in% wx_QAQC$mean.C &
-#            # min.C %in% wx_QAQC$min.C)
-# 
-# 
 yellowstone_wx_wy <- Weather %>%
   mutate(
     Date = mdy(Date),
@@ -163,37 +87,7 @@ yellowstone_wx_wy <- Weather %>%
 #Get rid of Inf values and replace with NAs
 na_strings <- c(-Inf,Inf)
 yellowstone_wx_wy <- yellowstone_wx_wy %>% naniar::replace_with_na_all(condition = ~.x %in% na_strings)
-# 
-# Weather_2007 <- Weather %>%
-#   mutate(Date=mdy(Date), 
-#          water_year=calcWaterYear(Date)) %>%
-#   filter(water_year==2007)
-# #There's barely any data for this water_year... some November dates but nothing into the spring. 
-# #How much more data could be missing?
-# 
-# naniar::vis_miss(Weather)
-# #There's a LOT of missing data for SnowDepth.mm particularly toward the end of the dataset
-# #It makes me not want to rely on this too heavily, especially since we see an *apparent*
-# #decline in max snow depth later in the record. It's probably just because the data are spotty.
-# 
-# #Visualize the missing data over time
-# ggplot(Weather %>%
-#          mutate(Date=mdy(Date), 
-#                 water_year=calcWaterYear(Date)), 
-#        aes(x = Date, 
-#            y = SnowDepth.mm)) + 
-#   naniar::geom_miss_point(alpha=0.05)
-# 
-# #Do we have that issue with say snow.mm?
-# ggplot(Weather %>%
-#          mutate(Date=mdy(Date), 
-#                 water_year=calcWaterYear(Date)), 
-#        aes(x = Date, 
-#            y = snow.mm)) + 
-#   naniar::geom_miss_point(alpha=0.05)
-# #Not quite as bad... 
-# 
-# 
+
 # #Season weather by water-year
 yellowstone_wx_seasons <- Weather %>%
   mutate(
@@ -250,10 +144,6 @@ yellowstone_wx_monthly <- Weather %>%
     names_glue = "{month_name}{.value}",
     values_from = c(Max:SnowDepth)
   ) 
-
-
-
-
 
 
 #Join them all together
@@ -406,23 +296,6 @@ ysl_bind <- yellowstone_phenology %>%
   rename(iceOn=IceOnDate,
          iceOff=IceOffDate)
 
-#modify YSL dataset for binding
-# ysl_ice <- YSLon %>%
-#   select(Year, IceOnDate, IceOnJulian, IceOffDate, IceOffJulian) %>%
-#   mutate(IceOnJulian_new = case_when(IceOnJulian > 365 ~ IceOnJulian - 365,
-#                                      TRUE ~ IceOnJulian)) %>%
-#   mutate(IceOn = ymd(parse_date_time(paste(Year, IceOnJulian_new), orders = "yj")),
-#          IceOff = ymd(parse_date_time(paste(Year, IceOffJulian), orders = "yj")),
-#          j_on_wy = hydro.day(IceOn),
-#          j_off_wy = hydro.day(IceOff),
-#          ice_days = j_off_wy - j_on_wy,
-#          start_year = Year,
-#          water_year = calcWaterYear(IceOn),
-#          lake = "yellowstone") %>% 
-#   select(-c(IceOnDate:IceOnJulian_new)) 
-
-
-
 str(ysl_bind)
 str(non_ysl)
 
@@ -537,12 +410,8 @@ mod0_iceOn <- gam(j_on_wy ~ s(water_year),
                   correlation = corCAR1(form = ~ Year),
                   method = "REML")
 summary(mod0_iceOn)
-# summary(mod0_iceOn)
 draw(mod0_iceOn)
-# draw(mod0_iceOn)
 appraise(mod0_iceOn)
-# appraise(mod0_iceOn)
-#These results are different as with Lusha's code, but still no trend
 
 ### Start with all fall variables that were highly correlated
 IceOnVars
@@ -554,11 +423,8 @@ mod1_iceOn <- gam(j_on_wy ~ s(FallTempSum) + s(OctTempSum) +
                   # correlation = corCAR1(form = ~ Year),
                   method = "REML")
 summary(mod1_iceOn)
-# summary(mod1_iceOn)
 draw(mod1_iceOn)
-# draw(mod1_iceOn)
 appraise(mod1_iceOn)
-# appraise(mod1_iceOn)
 
 mod2_iceOn <- gam(j_on_wy ~  s(FallTempSum) + 
                     s(OctMin) + s(FallMin) + s(DecMin)  + s(DecTempSum),
@@ -673,7 +539,7 @@ Fig3A <-
                 vjust=vjustvar,
                 label="a",
                 fontface="bold"))
-
+Fig3A
 
 # # >>>>  Panel B -- Ice On vs. Cumulative min Dec  -------------------------------------
 
@@ -737,7 +603,7 @@ Fig3B <-
                 vjust=vjustvar,
                 label="b",
                 fontface="bold"))
-
+Fig3B
 
 
 
@@ -803,7 +669,7 @@ Fig3C <-
                 vjust=vjustvar,
                 label="c",
                 fontface="bold"))
-
+Fig3C
 
 # Export Table Ice On Models ----------------------------------------------
 
@@ -842,8 +708,6 @@ mod0_iceOff <- gam(j_off_wy ~ s(water_year),
 summary(mod0_iceOff)
 draw(mod0_iceOff)
 appraise(mod0_iceOff)
-#These are the same as with Lusha's code
-
 
 IceOffVars
 
@@ -1039,7 +903,7 @@ Fig3E <-
                 vjust=vjustvar,
                 label="e",
                 fontface="bold"))
-
+Fig3E
 
 
 # >>>> Panel C - Ice off versus MayMin ----------------------------------
@@ -1105,6 +969,7 @@ Fig3F <-
                 vjust=vjustvar,
                 label="f",
                 fontface="bold"))
+Fig3F
 
 # >>>> Panel D - Ice off versus SpringSnow ----------------------------------
 summary(mod4_iceOff)
@@ -1169,7 +1034,7 @@ Fig3G <-
                 vjust=vjustvar,
                 label="g",
                 fontface="bold"))
-
+Fig3G
 
 # Export Table Ice Off Models ----------------------------------------------
 
@@ -1281,8 +1146,8 @@ mod0_FallTempSum <- gam(FallTempSum ~ s(water_year) ,
                       method = "REML")
 summary(mod0_FallTempSum)
 draw(mod0_FallTempSum)
-# report(mod0_FallTempSum)
-# acf(residuals(mod0_FallTempSum), lag.max = 10, plot = TRUE, main = "ACF of Residuals")
+report(mod0_FallTempSum)
+acf(residuals(mod0_FallTempSum), lag.max = 10, plot = TRUE, main = "ACF of Residuals")
 #No temporal autocorrelation
 
 
@@ -2095,7 +1960,7 @@ GAMS_AnnualSnow <- cumulSnowPred %>%
   theme_pubr(base_size=8, border=TRUE)
 GAMS_AnnualSnow
 
-ggsave(plot=last_plot(), "Figures/GAMS_AnnualSnow.png",
+ggsave(plot=last_plot(), "Figures/MS/GAMS_AnnualSnow.png",
        dpi=600, width = 6, height = 5, units = 'in')
 
 
@@ -2171,7 +2036,7 @@ GAMS_AnnualMin <- MinTempPred %>%
   theme_pubr(base_size=8, border=TRUE)
 GAMS_AnnualMin
 
-ggsave(plot=last_plot(), "Figures/GAMS_AnnualMin.png",
+ggsave(plot=last_plot(), "Figures/MS/GAMS_AnnualMin.png",
        dpi=600, width = 6, height = 5, units = 'in')
 
 
@@ -2237,10 +2102,10 @@ GAMS_AnnualMax <- maxTempPred %>%
   ggplot(aes(x=water_year,y=fit))+
   geom_point(data=yellowstone_full, aes(x=water_year, y=AnnualMax),
              shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
-  geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
-  geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
-  geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
-  geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
+  # geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
+  # geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
   labs(x="Year",y="Cumulative annual maximum temperature (°C)")+
   coord_cartesian(xlim=c(1925,2025))+
   scale_x_continuous(breaks=seq(1930, 2020, 15))+
@@ -2248,7 +2113,7 @@ GAMS_AnnualMax <- maxTempPred %>%
   theme_pubr(base_size=8, border=TRUE)
 GAMS_AnnualMax
 
-ggsave(plot=last_plot(), "Figures/GAMS_AnnualMax.png",
+ggsave(plot=last_plot(), "Figures/MS/GAMS_AnnualMax.png",
        dpi=600, width = 6, height = 5, units = 'in')
 
 
@@ -2310,10 +2175,10 @@ GAMS_AnnualRain <- AnnualRainPred %>%
   ggplot(aes(x=water_year,y=fit))+
   geom_point(data=yellowstone_full, aes(x=water_year, y=AnnualRain),
              shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
-  geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
-  geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
-  geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
-  geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
+  # geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
+  # geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
   labs(x="Year",y="Cumulative annual rainfall (mm)")+
   coord_cartesian(xlim=c(1925,2025))+
   scale_x_continuous(breaks=seq(1930, 2020, 15))+
@@ -2321,7 +2186,7 @@ GAMS_AnnualRain <- AnnualRainPred %>%
   theme_pubr(base_size=8, border=TRUE)
 GAMS_AnnualRain
 
-ggsave(plot=last_plot(), "Figures/GAMS_AnnualRain.png",
+ggsave(plot=last_plot(), "Figures/MS/GAMS_AnnualRain.png",
        dpi=600, width = 6, height = 5, units = 'in')
 
 
@@ -2409,7 +2274,7 @@ GAMS_WinterSnow <- cumulWinterSnowPred %>%
   theme_pubr(base_size=8, border=TRUE)
 GAMS_WinterSnow
 
-ggsave(plot=last_plot(), "Figures/GAMS_WinterSnow.png",
+ggsave(plot=last_plot(), "Figures/MS/GAMS_WinterSnow.png",
        dpi=600, width = 6, height = 5, units = 'in')
 
 
@@ -2473,10 +2338,10 @@ GAMS_WinterRain <- WinterRainPred %>%
   ggplot(aes(x=water_year,y=fit))+
   geom_point(data=yellowstone_full, aes(x=water_year, y=WinterRain),
              shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
-  geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
-  geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
-  geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
-  geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
+  # geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
+  # geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
   labs(x="Year",y="Cumulative winter rain (mm)")+
   # coord_cartesian(xlim=c(1925,2025),
   #                 ylim=c(900,2100))+
@@ -2485,7 +2350,7 @@ GAMS_WinterRain <- WinterRainPred %>%
   theme_pubr(base_size=8, border=TRUE)
 GAMS_WinterRain
 
-ggsave(plot=last_plot(), "Figures/GAMS_WinterRain.png",
+ggsave(plot=last_plot(), "Figures/MS/GAMS_WinterRain.png",
        dpi=600, width = 6, height = 5, units = 'in')
 
 # ~ Winter min temp. ----------------------------------------------------------
@@ -2623,10 +2488,10 @@ GAMS_WinterMax <- MaxWinterTempPred %>%
   ggplot(aes(x=water_year,y=fit))+
   geom_point(data=yellowstone_full, aes(x=water_year, y=WinterMax),
              shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
-  geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
-  geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
-  geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
-  geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
+  # geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
+  # geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
   labs(x="Year",y="Cumulative winter maximum temperature (°C)")+
   coord_cartesian(xlim=c(1925,2025))+
   scale_x_continuous(breaks=seq(1930, 2020, 15))+
@@ -3009,10 +2874,10 @@ GAMS_SpringMax <- MaxSpringTempPred %>%
   ggplot(aes(x=water_year,y=fit))+
   geom_point(data=yellowstone_full, aes(x=water_year, y=SpringMax),
              shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
-  geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
-  geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
-  geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
-  geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
+  # geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
+  # geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
   labs(x="Year",y="Cumulative spring maximum temperature (°C)")+
   coord_cartesian(xlim=c(1925,2025))+
   scale_x_continuous(breaks=seq(1930, 2020, 15))+
@@ -3169,10 +3034,10 @@ GAMS_SummerSnow <- cumulSummerSnowPred %>%
   ggplot(aes(x=water_year,y=fit))+
   geom_point(data=yellowstone_full, aes(x=water_year, y=SummerSnow),
              shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
-  geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
-  geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
-  geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
-  geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
+  # geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
+  # geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
   labs(x="Year",y="Cumulative summer snow (mm)")+
   coord_cartesian(xlim=c(1925,2025))+
   scale_x_continuous(breaks=seq(1930, 2020, 15))+
@@ -3244,10 +3109,10 @@ GAMS_SummerRain <- SummerRainPred %>%
   ggplot(aes(x=water_year,y=fit))+
   geom_point(data=yellowstone_full, aes(x=water_year, y=SummerRain),
              shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
-  geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
-  geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
-  geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
-  geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
+  # geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
+  # geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
   labs(x="Year",y="Cumulative summer rain (mm)")+
   # coord_cartesian(xlim=c(1925,2025),
   #                 ylim=c(900,2100))+
@@ -3633,10 +3498,10 @@ GAMS_FallRain <- FallRainPred %>%
   ggplot(aes(x=water_year,y=fit))+
   geom_point(data=yellowstone_full, aes(x=water_year, y=FallRain),
              shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
-  geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
-  geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
-  geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
-  geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
+  # geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
+  # geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
   labs(x="Year",y="Cumulative fall rain (mm)")+
   # coord_cartesian(xlim=c(1925,2025),
   #                 ylim=c(900,2100))+
@@ -3858,10 +3723,10 @@ GAMS_FallTempSum <- SumFallTempPred %>%
   ggplot(aes(x=water_year,y=fit))+
   geom_point(data=yellowstone_full, aes(x=water_year, y=FallTempSum),
              shape=21,fill="grey50", alpha=0.5)+ #Plot raw data
-  geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
-  geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
-  geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
-  geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
+  # geom_line(size=0.5, alpha=0.8)+ #Plot fitted trend
+  # geom_line(aes(x=water_year, y=incr), color="red", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_line(aes(x=water_year, y=decr), color="blue", size=2, alpha=0.8)+ #Highlight period of increasing trend
+  # geom_ribbon(aes(ymin = (lower), ymax = (upper), x = water_year), alpha = 0.5, inherit.aes = FALSE)+ #Plot CI around fitted trend
   labs(x="Year",y="Cumulative fall mean temperatures (°C)")+
   coord_cartesian(xlim=c(1925,2025))+
   scale_x_continuous(breaks=seq(1930, 2020, 15))+
